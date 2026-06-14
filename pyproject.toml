@@ -1,0 +1,21 @@
+[project]
+name = "web-fetch-mcp"
+version = "0.1.0"
+description = "Resilient web-fetch MCP server: 3-tier escalation (curl_cffi -> Patchright -> nodriver) that defeats most anti-bot walls, with article-extraction mode and automatic content-type handling (HTML/JSON/PDF/image)."
+requires-python = ">=3.11"
+dependencies = [
+    "mcp[cli]>=1.2.0",
+    "curl-cffi>=0.7.0",
+    "patchright>=1.49.0",
+    "markdownify>=0.13.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=5.0.0",
+    "nodriver>=0.40",
+    "trafilatura>=1.8.0",
+    "pypdf>=4.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
