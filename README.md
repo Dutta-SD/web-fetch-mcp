@@ -94,7 +94,7 @@ uv pip install -e .        # installs the `web-fetch-mcp` console command
 web-fetch-mcp              # run the stdio MCP server
 ```
 
-Add to an MCP client (e.g. Claude Desktop) as a stdio server that runs the
+Register it with any MCP-compatible client as a stdio server that runs the
 `web-fetch-mcp` command (or `python -m web_fetch_mcp.controller.app`).
 
 ```python

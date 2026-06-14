@@ -1,4 +1,16 @@
+# Virtualenv / caches
 .venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+.ruff_cache/
+
+# Build artifacts (never commit or publish these)
+dist/
+build/
+*.egg-info/
+
+# Local editor/IDE config — must never be packaged or published
+.cursor/
+.idea/
+.vscode/

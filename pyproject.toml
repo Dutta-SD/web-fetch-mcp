@@ -1,8 +1,33 @@
 [project]
 name = "web-fetch-mcp"
 version = "0.1.0"
-description = "Resilient web-fetch MCP server: 3-tier escalation (curl_cffi -> Patchright -> nodriver) that defeats most anti-bot walls, with article-extraction mode and automatic content-type handling (HTML/JSON/PDF/image)."
+description = "Resilient web-fetch MCP server: 3-tier escalation (curl_cffi -> Patchright -> nodriver) that fails honestly, with article-extraction mode and automatic content-type handling (HTML/JSON/PDF/image)."
+readme = "README.md"
 requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Sandip Dutta", email = "duttasandip11100@gmail.com" }]
+keywords = [
+    "mcp",
+    "model-context-protocol",
+    "web-scraping",
+    "anti-bot",
+    "llm",
+    "fetch",
+    "curl-cffi",
+    "playwright",
+    "nodriver",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
     "mcp[cli]>=1.2.0",
     "curl-cffi>=0.7.0",
@@ -15,12 +40,34 @@ dependencies = [
     "pypdf>=4.0.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/Dutta-SD/web-fetch-mcp"
+Source = "https://github.com/Dutta-SD/web-fetch-mcp"
+Issues = "https://github.com/Dutta-SD/web-fetch-mcp/issues"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/web_fetch_mcp"]
+
+# Explicit allow-list for the sdist so local editor/agent config, build
+# artifacts, and caches can NEVER be packaged or published. Only source, tests,
+# docs, and licensing ship.
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/assets",
+    "/README.md",
+    "/TODO.md",
+    "/LICENSE",
+    "/NOTICE",
+    "/pyproject.toml",
+]
+# Keep dev/VCS dotfiles out of the published sdist entirely.
+exclude = ["/.gitignore", "/.github", "/.ruff_cache"]
 
 [project.scripts]
 web-fetch-mcp = "web_fetch_mcp.controller.app:main"
