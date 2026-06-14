@@ -713,3 +713,53 @@ async def fetch(
     )
 
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+async def screenshot(
+    url: str,
+    full_page: bool = True,
+    viewport_width: int = 1920,
+    viewport_height: int = 1080,
+    wait_ms: int = 2000,
+    dismiss_selector: Optional[str] = None,
+    proxy: Optional[str] = None,
+) -> Image:
+    """Render a web page in a real browser and return a PNG screenshot.
+
+    The visual counterpart to `fetch`. Use it when the user asks to "show",
+    "screenshot", or "see what a page looks like", or when layout/visual state
+    matters (charts, dashboards, rendered design). Same anti-bot-resistant real
+    Chrome engine as `fetch`'s Tier 2, with optional proxy support.
+
+    Args:
+        url: Fully-qualified URL (https://...).
+        full_page: True (default) captures the entire scrollable page; False
+            captures only the 1920x1080 (or given) viewport.
+        viewport_width: Browser viewport width in pixels. Default 1920.
+        viewport_height: Browser viewport height in pixels. Default 1080.
+        wait_ms: Extra settle time (ms) after load before capturing, for late
+            content/animations. Default 2000.
+        dismiss_selector: CSS/text selector for a blocking overlay to click before
+            capturing (cookie banner, modal). Failures are silent.
+        proxy: Optional proxy URL "http[s]://[user:pass@]host:port" (ideally
+            residential) for the IP-reputation layer.
+
+    Returns:
+        The screenshot as an MCP Image (PNG), shown inline.
+    """
+    browser = await _get_browser()
+    ctx = await browser.new_context(
+        viewport={"width": viewport_width, "height": viewport_height},
+        locale="en-US",
+        timezone_id="America/New_York",
+        proxy=_proxy_for_playwright(proxy),
+    )
+    try:
+        page, _status = await _open_page(ctx, url, wait_ms, dismiss_selector)
+        png_bytes = await page.screenshot(full_page=full_page, type="png")
+        return Image(data=png_bytes, format="png")
+    finally:
+        await ctx.close()
+
+
+if __name__ == "__main__":
+    mcp.run()
