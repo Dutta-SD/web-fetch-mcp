@@ -27,6 +27,20 @@ from web_fetch_mcp.core.proxy import proxy_for_playwright
 
 log = logging.getLogger("web-fetch")
 
+# Chromium navigation errors that mean the host is unreachable, not slow. On
+# these, retrying with a softer wait would only load the browser's error page,
+# so the tier must fail (and escalate/raise) instead of returning that chrome.
+_FATAL_NAV_ERRORS = (
+    "ERR_NAME_NOT_RESOLVED",
+    "ERR_CONNECTION_REFUSED",
+    "ERR_CONNECTION_TIMED_OUT",
+    "ERR_CONNECTION_CLOSED",
+    "ERR_CONNECTION_RESET",
+    "ERR_INTERNET_DISCONNECTED",
+    "ERR_ADDRESS_UNREACHABLE",
+    "ERR_SSL_PROTOCOL_ERROR",
+)
+
 
 class BrowserManager:
     """Lazily launches and reuses a single Patchright Chromium.
@@ -151,7 +165,13 @@ async def open_page(
     try:
         resp = await page.goto(url, wait_until="networkidle", timeout=timeout_ms)
         status = resp.status if resp else 0
-    except Exception as e:  # noqa: BLE001 — networkidle can time out; retry softer
+    except Exception as e:  # noqa: BLE001 — distinguish "slow" from "unreachable"
+        # A hard connection/DNS failure is fatal: retrying would just load the
+        # browser's own error page (e.g. "this site can't be reached"), which we
+        # must NOT return as content. Only a settle/timeout warrants a softer
+        # retry with domcontentloaded.
+        if any(tok in str(e) for tok in _FATAL_NAV_ERRORS):
+            raise
         log.warning("networkidle failed (%s); retrying with domcontentloaded", e)
         resp = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
         status = resp.status if resp else 0

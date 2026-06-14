@@ -39,6 +39,19 @@ BLOCK_MARKERS: tuple[str, ...] = (
     "please wait for verification",  # JS verification gate
     "checking your browser before accessing",  # classic anti-bot interstitial
     "checking if the site connection is secure",  # JS challenge body
+    # Browser network-error chrome (rendered when a browser tier navigates to an
+    # unreachable host) — treat as a block so the fetch fails honestly instead of
+    # returning the error interstitial as if it were page content. "neterror" is
+    # the browser error-page template id and appears early in the document, so it
+    # is matched even when the visible "can't be reached" text sits past the scan
+    # window in a script-heavy error page.
+    "neterror",
+    "this site can’t be reached",  # curly apostrophe (browser error page)
+    "this site can't be reached",  # straight apostrophe variant
+    "err_name_not_resolved",
+    "err_connection_refused",
+    "err_connection_timed_out",
+    "err_internet_disconnected",
 )
 
 # Empty single-page-app mount-point divs, indicating client-side rendering.

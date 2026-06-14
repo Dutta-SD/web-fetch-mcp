@@ -252,6 +252,19 @@ def test_legitimate_page_with_wait_text_not_blocked():
     assert is_blocked(html, 200) is False
 
 
+def test_browser_unreachable_error_page_detected_as_block():
+    """A browser tier rendering a 'site can't be reached' error page (status 0)
+    must be flagged as blocked, so the fetch fails honestly instead of returning
+    the browser's own error interstitial as if it were content.
+    """
+    html = (
+        "<html><body><h1>This site can’t be reached</h1>"
+        "<p>example.invalid’s server IP address could not be found. "
+        "ERR_NAME_NOT_RESOLVED</p></body></html>"
+    )
+    assert is_blocked(html, 0) is True
+
+
 # ---------- selector normalization ----------
 
 
