@@ -149,3 +149,26 @@ def _is_blocked(html: str, status: int) -> bool:
     return any(marker in head for marker in _BLOCK_MARKERS)
 
 
+# ---------- SPA detection ----------
+
+_SPA_SHELL_PATTERNS = [
+    re.compile(r'<div id="root">\s*</div>', re.IGNORECASE),
+    re.compile(r'<div id="app">\s*</div>', re.IGNORECASE),
+    re.compile(r'<div id="__next">\s*</div>', re.IGNORECASE),
+    re.compile(r'<div id="__nuxt">\s*</div>', re.IGNORECASE),
+]
+
+
+def _looks_like_spa_shell(html: str) -> bool:
+    """Empty mount-point div, OR very little visible text + many scripts."""
+    if any(p.search(html) for p in _SPA_SHELL_PATTERNS):
+        return True
+    try:
+        soup = BeautifulSoup(html, "lxml")
+    except Exception:
+        soup = BeautifulSoup(html, "html.parser")
+    text = soup.get_text(strip=True)
+    scripts = len(soup.find_all("script"))
+    return len(text) < 500 and scripts > 3
+
+
