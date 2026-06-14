@@ -46,18 +46,15 @@ from mcp.types import ToolAnnotations
 # existing flat `from server import ...` imports keep working until the test
 # suite is migrated (plan steps 8-9). The orchestrator/tools move in later steps.
 from web_fetch_mcp.accessor.dynamic_client import capture_screenshot as _capture_screenshot
-from web_fetch_mcp.accessor.dynamic_client import fetch_dynamic as _fetch_dynamic
-from web_fetch_mcp.accessor.static_client import fetch_static as _fetch_static
-from web_fetch_mcp.accessor.stealth_client import fetch_nodriver as _fetch_nodriver
 from web_fetch_mcp.core import config as _config
 from web_fetch_mcp.core.backoff import normalize_selectors as _normalize_selectors
 from web_fetch_mcp.core.backoff import retry_after_delay as _retry_after_delay
 from web_fetch_mcp.core.detection import is_blocked as _is_blocked
-from web_fetch_mcp.core.detection import looks_like_spa_shell as _looks_like_spa_shell
 from web_fetch_mcp.core.models import FetchBlocked, FetchResult
 from web_fetch_mcp.core.rendering import detect_content_type as _detect_content_type
 from web_fetch_mcp.core.rendering import render_by_type as _render_by_type
 from web_fetch_mcp.core.rendering import to_output as _to_output
+from web_fetch_mcp.service.fetcher import fetch_url as _fetch_url
 from web_fetch_mcp.service.retry import with_retry as _with_retry
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -190,75 +187,14 @@ async def fetch(
         fetch("https://tough.site", proxy="http://u:p@gw:8000")   # residential IP
         fetch("https://site/x", dismiss_selector="text=Accept")   # dismiss banner
     """
-    if mode not in {"auto", "static", "dynamic", "stealth"}:
-        raise ValueError(f"mode must be auto|static|dynamic|stealth, got {mode!r}")
-    if output not in {"markdown", "html", "text", "article"}:
-        raise ValueError(f"output must be markdown|html|text|article, got {output!r}")
-    if dismiss_selector and mode == "static":
-        raise ValueError(
-            "dismiss_selector requires a browser mode (dynamic/stealth/auto)"
-        )
-
-    not_blocked = lambda r: not _is_blocked(r.body, r.status)  # noqa: E731
-
-    # ----- single-tier modes -----
-    if mode == "static":
-        result = await _attempt(
-            lambda: _fetch_static(url, proxy), not_blocked, max_retries
-        )
-        if result is None:
-            raise FetchBlocked(f"static fetch blocked/failed for {url}")
-        return _render_by_type(result, output)
-
-    if mode == "dynamic":
-        result = await _attempt(
-            lambda: _fetch_dynamic(url, wait_ms, dismiss_selector, proxy=proxy),
-            not_blocked,
-            max_retries,
-        )
-        if result is None:
-            raise FetchBlocked(f"dynamic fetch blocked/failed for {url}")
-        return _to_output(result.body, output)
-
-    if mode == "stealth":
-        result = await _attempt(
-            lambda: _fetch_nodriver(url, wait_ms, proxy), not_blocked, max_retries
-        )
-        if result is None:
-            raise FetchBlocked(f"stealth (nodriver) fetch blocked/failed for {url}")
-        return _to_output(result.body, output)
-
-    # ----- auto: escalate Tier 1 -> Tier 2 -> Tier 3 -----
-    # dismiss_selector needs a browser; skip straight to Tier 2.
-    if not dismiss_selector:
-        static_ok = lambda r: (  # noqa: E731
-            not _is_blocked(r.body, r.status) and not _looks_like_spa_shell(r.body)
-        )
-        result = await _attempt(
-            lambda: _fetch_static(url, proxy), static_ok, max_retries
-        )
-        if result is not None:
-            return _render_by_type(result, output)
-        log.info("Tier 1 (static) insufficient; escalating to Tier 2 (Patchright)")
-
-    result = await _attempt(
-        lambda: _fetch_dynamic(url, wait_ms, dismiss_selector, proxy=proxy),
-        not_blocked,
-        max_retries,
-    )
-    if result is not None:
-        return _to_output(result.body, output)
-    log.info("Tier 2 (Patchright) blocked; escalating to Tier 3 (nodriver)")
-
-    result = await _attempt(
-        lambda: _fetch_nodriver(url, wait_ms, proxy), not_blocked, max_retries
-    )
-    if result is not None:
-        return _to_output(result.body, output)
-
-    raise FetchBlocked(
-        f"all strategies (static, patchright, nodriver) blocked/failed for {url}. "
-        f"Try a residential proxy= or, for CAPTCHA-gated sites, a managed unblocker API."
+    return await _fetch_url(
+        url,
+        mode=mode,
+        output=output,
+        wait_ms=wait_ms,
+        dismiss_selector=dismiss_selector,
+        proxy=proxy,
+        max_retries=max_retries,
     )
 
 
