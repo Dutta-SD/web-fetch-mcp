@@ -28,8 +28,16 @@ web-fetch-mcp = "web_fetch_mcp.controller.app:main"
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",
+    "ruff>=0.6.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

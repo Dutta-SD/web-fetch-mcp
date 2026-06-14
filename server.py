@@ -38,273 +38,56 @@ from __future__ import annotations
 
 import asyncio
 import atexit
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
-import io
-import json
 import logging
 import os
-import random
-import re
 from typing import Optional
-from urllib.parse import urlparse
 
-from bs4 import BeautifulSoup
 from curl_cffi.requests import AsyncSession
-from markdownify import markdownify as to_md
 from mcp.server.fastmcp import FastMCP, Image
 from mcp.types import ToolAnnotations
 from patchright.async_api import Browser, Playwright, async_playwright
-import pypdf
-import trafilatura
+
+# NOTE: transitional shim. The pure domain logic now lives in the layered
+# `web_fetch_mcp.core` package; this module re-exports it so the existing flat
+# `from server import ...` imports keep working until the test suite is migrated
+# (plan steps 8-9). The accessor/orchestrator/tool code below is moved in later
+# steps. Underscore-prefixed aliases preserve the historical names.
+from web_fetch_mcp.core import config as _config
+from web_fetch_mcp.core.backoff import backoff_delay as _backoff_delay
+from web_fetch_mcp.core.backoff import normalize_selectors as _normalize_selectors
+from web_fetch_mcp.core.backoff import retry_after_delay as _retry_after_delay
+from web_fetch_mcp.core.detection import is_blocked as _is_blocked
+from web_fetch_mcp.core.detection import looks_like_spa_shell as _looks_like_spa_shell
+from web_fetch_mcp.core.models import FetchBlocked, FetchResult
+from web_fetch_mcp.core.proxy import proxy_for_curl as _proxy_for_curl
+from web_fetch_mcp.core.proxy import proxy_for_nodriver as _proxy_for_nodriver
+from web_fetch_mcp.core.proxy import proxy_for_playwright as _proxy_for_playwright
+from web_fetch_mcp.core.rendering import detect_content_type as _detect_content_type
+from web_fetch_mcp.core.rendering import render_by_type as _render_by_type
+from web_fetch_mcp.core.rendering import to_output as _to_output
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("web-fetch")
 
 mcp = FastMCP("web-fetch")
 
-# Headful gives materially better evasion than headless; default headful and
-# fall back to headless if the launch fails (e.g. a server with no display).
-_HEADLESS = os.environ.get("WEBFETCH_HEADLESS", "0") == "1"
+_HEADLESS = _config.HEADLESS
+_DEFAULT_HEADERS = _config.DEFAULT_HEADERS
+_RETRY_AFTER_CAP = _config.RETRY_AFTER_CAP
 
-# Retry/backoff tuning (seconds). Applied within a tier before escalating.
-_BACKOFF_BASE = 1.0
-_BACKOFF_CAP = 12.0
-_RETRY_AFTER_CAP = 30.0  # cap honored Retry-After so a hostile value can't hang us
-
-# A realistic Chrome header set layered on top of curl_cffi's impersonation.
-_DEFAULT_HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,"
-    "image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Upgrade-Insecure-Requests": "1",
-}
-
-
-class FetchBlocked(Exception):
-    """Raised when every strategy was blocked or failed."""
-
-
-@dataclass
-class FetchResult:
-    """Result of a single fetch attempt from any tier.
-
-    Tier 1 (curl_cffi) populates all fields. Browser tiers (Patchright/nodriver)
-    only ever yield rendered HTML, so they fill body/status and leave raw=None,
-    headers={} — the PDF/JSON/image paths never apply to them.
-    """
-
-    body: str
-    status: int
-    raw: bytes | None = None
-    headers: dict = field(default_factory=dict)
-    content_type: str = ""
-
-
-# ---------- block / challenge detection ----------
-
-# Lowercased substrings that appear in anti-bot interstitials. Kept conservative
-# to avoid false positives on legitimate pages that merely discuss these topics.
-_BLOCK_MARKERS = (
-    "pardon our interruption",
-    "access denied",
-    "you have been blocked",
-    "just a moment...",  # Cloudflare interstitial
-    "attention required! | cloudflare",
-    "cf-browser-verification",
-    "cf-challenge-running",
-    "/cdn-cgi/challenge-platform",  # Cloudflare Turnstile/JS challenge
-    "_cf_chl_opt",
-    "challenge-error-text",
-    "verify you are human",
-    "verifying you are human",
-    "px-captcha",  # PerimeterX / HUMAN
-    "please enable javascript and cookies to continue",
-    "datadome",  # DataDome challenge payload
-    "incapsula incident id",  # Imperva
-    "request unsuccessful. incapsula",
-    "ddos protection by",
-    "please wait for verification",  # Reddit / shreddit verification gate
-    "checking your browser before accessing",  # classic anti-bot interstitial
-    "checking if the site connection is secure",  # Cloudflare "Just a moment" body
-)
-
-
-def _is_blocked(html: str, status: int) -> bool:
-    """True if the response is an anti-bot block/challenge rather than content.
-
-    Catches both hard blocks (403/429) and soft blocks (Akamai et al. return
-    HTTP 200 with a block body to fool naive scrapers).
-    """
-    if status in (401, 403, 429) or status == 503:
-        return True
-    if not html:
-        return False
-    head = html[:30_000].lower()
-    return any(marker in head for marker in _BLOCK_MARKERS)
-
-
-# ---------- SPA detection ----------
-
-_SPA_SHELL_PATTERNS = [
-    re.compile(r'<div id="root">\s*</div>', re.IGNORECASE),
-    re.compile(r'<div id="app">\s*</div>', re.IGNORECASE),
-    re.compile(r'<div id="__next">\s*</div>', re.IGNORECASE),
-    re.compile(r'<div id="__nuxt">\s*</div>', re.IGNORECASE),
+__all__ = [
+    "FetchBlocked",
+    "FetchResult",
+    "_attempt",
+    "_retry_after_delay",
+    "_to_output",
+    "_detect_content_type",
+    "_render_by_type",
+    "_is_blocked",
+    "_normalize_selectors",
+    "fetch",
+    "screenshot",
 ]
-
-
-def _looks_like_spa_shell(html: str) -> bool:
-    """Empty mount-point div, OR very little visible text + many scripts."""
-    if any(p.search(html) for p in _SPA_SHELL_PATTERNS):
-        return True
-    try:
-        soup = BeautifulSoup(html, "lxml")
-    except Exception:
-        soup = BeautifulSoup(html, "html.parser")
-    text = soup.get_text(strip=True)
-    scripts = len(soup.find_all("script"))
-    return len(text) < 500 and scripts > 3
-
-
-# ---------- output formatting ----------
-
-
-def _to_output(html: str, fmt: str) -> str:
-    if fmt == "html":
-        return html
-    if fmt == "text":
-        try:
-            return BeautifulSoup(html, "lxml").get_text("\n", strip=True)
-        except Exception:
-            return BeautifulSoup(html, "html.parser").get_text("\n", strip=True)
-    if fmt == "article":
-        extracted = trafilatura.extract(html, output_format="markdown")
-        if extracted and extracted.strip():
-            return extracted.strip()
-        # not an article (homepage/listing/etc.) -> fall back to full markdown
-        return to_md(html, heading_style="ATX")
-    return to_md(html, heading_style="ATX")
-
-
-# Known image magic-byte prefixes for content sniffing.
-_IMAGE_MAGIC = (b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"RIFF", b"BM", b"\x00\x00\x01\x00")
-
-
-def _detect_content_type(result: FetchResult) -> str:
-    """Classify a fetch result as html | json | pdf | image (header, then sniff)."""
-    ct = (result.content_type or "").lower()
-    if "application/pdf" in ct:
-        return "pdf"
-    if "json" in ct:
-        return "json"
-    if ct.startswith("image/"):
-        return "image"
-    # An explicit HTML/XHTML header is definitive — don't sniff a body that may
-    # legitimately start with '{' (e.g. inline JSON-LD) into being JSON.
-    if "html" in ct:
-        return "html"
-    # sniff body/raw when header is missing or generic (octet-stream, text/plain)
-    raw = result.raw
-    if raw:
-        if raw.startswith(b"%PDF-"):
-            return "pdf"
-        if any(raw.startswith(m) for m in _IMAGE_MAGIC):
-            return "image"
-    stripped = result.body.lstrip()
-    if stripped[:1] in ("{", "["):
-        return "json"
-    return "html"
-
-
-def _render_by_type(result: FetchResult, output: str) -> str:
-    """Render a FetchResult per its detected content type.
-
-    JSON -> pretty-printed; PDF -> extracted text; image -> a 'use screenshot'
-    note; html -> the normal _to_output path (incl. article mode).
-    """
-    kind = _detect_content_type(result)
-    if kind == "json":
-        try:
-            return json.dumps(json.loads(result.body), indent=2, ensure_ascii=False)
-        except (ValueError, TypeError):
-            return result.body
-    if kind == "pdf":
-        try:
-            reader = pypdf.PdfReader(io.BytesIO(result.raw or b""))
-            text = "\n\n".join((page.extract_text() or "") for page in reader.pages)
-        except Exception as e:  # noqa: BLE001 — corrupt/empty PDF is a real failure
-            raise FetchBlocked(
-                f"could not extract text from PDF ({type(e).__name__})"
-            ) from e
-        return text.strip()
-    if kind == "image":
-        ct = result.content_type or "image"
-        return f"[{ct} — use the screenshot tool to view this URL]"
-    return _to_output(result.body, output)
-
-
-# ---------- proxy parsing ----------
-
-
-def _proxy_for_curl(proxy: Optional[str]) -> Optional[dict]:
-    """curl_cffi wants {'http': ..., 'https': ...}."""
-    if not proxy:
-        return None
-    return {"http": proxy, "https": proxy}
-
-
-def _proxy_for_playwright(proxy: Optional[str]) -> Optional[dict]:
-    """Playwright wants {'server', 'username'?, 'password'?} with creds split out."""
-    if not proxy:
-        return None
-    p = urlparse(proxy)
-    server = f"{p.scheme}://{p.hostname}" + (f":{p.port}" if p.port else "")
-    out: dict = {"server": server}
-    if p.username:
-        out["username"] = p.username
-    if p.password:
-        out["password"] = p.password
-    return out
-
-
-# ---------- backoff ----------
-
-
-def _retry_after_delay(headers: dict) -> Optional[float]:
-    """Parse a Retry-After header into a capped, non-negative wait in seconds.
-
-    Accepts integer seconds or an HTTP-date. Returns None when the header is
-    absent or unparseable. Capped at _RETRY_AFTER_CAP so a hostile/huge value
-    cannot stall the tool.
-    """
-    raw = headers.get("retry-after")
-    if not raw:
-        return None
-    raw = raw.strip()
-    if raw.isdigit():
-        return min(float(raw), _RETRY_AFTER_CAP)
-    try:
-        when = parsedate_to_datetime(raw)
-    except (TypeError, ValueError):
-        return None
-    if when is None:
-        return None
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
-    delta = (when - datetime.now(timezone.utc)).total_seconds()
-    return min(max(delta, 0.0), _RETRY_AFTER_CAP)
-
-
-def _backoff_delay(attempt: int) -> float:
-    """Exponential backoff with full jitter."""
-    raw = min(_BACKOFF_CAP, _BACKOFF_BASE * (2**attempt))
-    return random.uniform(0, raw)
 
 
 # ---------- Tier 1: static (curl_cffi) ----------
@@ -370,15 +153,6 @@ async def _get_browser() -> Browser:
             if _browser is None:
                 raise RuntimeError(f"could not launch any chromium: {last_err}")
         return _browser
-
-
-def _normalize_selectors(sel) -> list[str]:
-    """Normalize a dismiss/expand selector arg to a list of selector strings."""
-    if sel is None:
-        return []
-    if isinstance(sel, str):
-        return [sel]
-    return list(sel)
 
 
 async def _open_page(
@@ -456,10 +230,9 @@ async def _fetch_nodriver(
     import nodriver as uc  # lazy
 
     browser_args = []
-    if proxy:
-        p = urlparse(proxy)
-        server = f"{p.hostname}:{p.port}" if p.port else (p.hostname or "")
-        browser_args.append(f"--proxy-server={p.scheme}://{server}")
+    proxy_arg = _proxy_for_nodriver(proxy)
+    if proxy_arg:
+        browser_args.append(f"--proxy-server={proxy_arg}")
 
     browser = None
     try:
