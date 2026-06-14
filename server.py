@@ -439,3 +439,87 @@ async def _fetch_dynamic(
         await ctx.close()
 
 
+# ---------- Tier 3: nodriver (defeats automation-protocol detection) ----------
+
+
+async def _fetch_nodriver(
+    url: str,
+    wait_ms: int = 2500,
+    proxy: Optional[str] = None,
+    timeout_ms: int = 30_000,
+) -> FetchResult:
+    """Drive Chrome over a custom CDP impl (not the standard automation interface).
+
+    Lazily imported so the server still runs if nodriver/Chrome is unavailable.
+    Status is not exposed by nodriver, so we return 0 and rely on body markers.
+    """
+    import nodriver as uc  # lazy
+
+    browser_args = []
+    if proxy:
+        p = urlparse(proxy)
+        server = f"{p.hostname}:{p.port}" if p.port else (p.hostname or "")
+        browser_args.append(f"--proxy-server={p.scheme}://{server}")
+
+    browser = None
+    try:
+        # nodriver only waits ~2.5s for the CDP endpoint. On hosts where Chrome
+        # is slow to start (e.g. an x86_64 Chrome under Rosetta on Apple Silicon)
+        # the first launch can lose that race, so retry — Rosetta/page cache warms
+        # after the first attempt and subsequent starts connect quickly.
+        async def _nd_start(headless: bool):
+            last_err: Optional[Exception] = None
+            for i in range(3):
+                try:
+                    return await uc.start(
+                        headless=headless,
+                        sandbox=False,
+                        browser_args=browser_args or None,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    last_err = e
+                    log.warning(
+                        "nodriver start (headless=%s) attempt %d failed: %s",
+                        headless,
+                        i,
+                        e,
+                    )
+                    await asyncio.sleep(1.0)
+            raise last_err  # type: ignore[misc]
+
+        try:
+            browser = await _nd_start(_HEADLESS)
+        except Exception as e:  # headful needs a display; fall back to headless
+            log.warning(
+                "nodriver headful unavailable (%s); falling back to headless", e
+            )
+            browser = await _nd_start(True)
+
+        page = await browser.get(url)
+        # let the page settle / any JS challenge resolve
+        await page.sleep(max(wait_ms, 1000) / 1000)
+        try:
+            html = await page.get_content()
+        except Exception:
+            html = await page.evaluate(
+                "document.documentElement.outerHTML", return_by_value=True
+            )
+        return FetchResult(body=(html or ""), status=0)
+    finally:
+        if browser is not None:
+            try:
+                browser.stop()
+            except Exception:
+                pass
+
+
+def _shutdown() -> None:
+    """Best-effort sync cleanup at interpreter exit."""
+    global _pw, _browser
+    _browser = None
+    _pw = None
+
+
+atexit.register(_shutdown)
+
+
