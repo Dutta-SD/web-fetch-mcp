@@ -36,7 +36,6 @@ server still works if it (or its Chrome) is unavailable.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from mcp.server.fastmcp import FastMCP, Image
@@ -51,7 +50,6 @@ from web_fetch_mcp.accessor.dynamic_client import fetch_dynamic as _fetch_dynami
 from web_fetch_mcp.accessor.static_client import fetch_static as _fetch_static
 from web_fetch_mcp.accessor.stealth_client import fetch_nodriver as _fetch_nodriver
 from web_fetch_mcp.core import config as _config
-from web_fetch_mcp.core.backoff import backoff_delay as _backoff_delay
 from web_fetch_mcp.core.backoff import normalize_selectors as _normalize_selectors
 from web_fetch_mcp.core.backoff import retry_after_delay as _retry_after_delay
 from web_fetch_mcp.core.detection import is_blocked as _is_blocked
@@ -60,6 +58,7 @@ from web_fetch_mcp.core.models import FetchBlocked, FetchResult
 from web_fetch_mcp.core.rendering import detect_content_type as _detect_content_type
 from web_fetch_mcp.core.rendering import render_by_type as _render_by_type
 from web_fetch_mcp.core.rendering import to_output as _to_output
+from web_fetch_mcp.service.retry import with_retry as _with_retry
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("web-fetch")
@@ -89,33 +88,21 @@ __all__ = [
 
 
 async def _attempt(coro_factory, satisfactory, max_retries: int) -> FetchResult | None:
-    """Run one strategy with retry+backoff. Returns the FetchResult if satisfactory, else None.
+    """Transitional shim over ``with_retry`` (removed once tests migrate, step 8).
 
-    coro_factory: zero-arg callable returning a fresh awaitable -> FetchResult
-    satisfactory: (FetchResult) -> bool  (True means 'good content, stop')
+    Adapts the historical zero-arg-factory call shape to the decorator: the
+    factory is wrapped and immediately invoked.
+
+    Args:
+        coro_factory: Zero-arg callable returning a fresh awaitable -> FetchResult.
+        satisfactory: Predicate over the FetchResult; True means 'stop'.
+        max_retries: Retries after the first attempt.
+
+    Returns:
+        The satisfactory FetchResult, or None when exhausted.
     """
-    for attempt in range(max_retries + 1):
-        result: FetchResult | None = None
-        try:
-            result = await coro_factory()
-        except Exception as e:  # noqa: BLE001 — network/launch error
-            log.info("strategy attempt %d errored: %s", attempt, e)
-            if attempt < max_retries:
-                await asyncio.sleep(_backoff_delay(attempt))
-                continue
-            return None
-        if satisfactory(result):
-            return result
-        log.info(
-            "strategy attempt %d unsatisfactory (status=%s, blocked=%s)",
-            attempt,
-            result.status,
-            _is_blocked(result.body, result.status),
-        )
-        if attempt < max_retries:
-            ra = _retry_after_delay(result.headers)
-            await asyncio.sleep(ra if ra is not None else _backoff_delay(attempt))
-    return None
+    runner = _with_retry(max_retries=max_retries, satisfactory=satisfactory)(coro_factory)
+    return await runner()
 
 
 # ---------- the one tool ----------
