@@ -307,3 +307,31 @@ def _backoff_delay(attempt: int) -> float:
     return random.uniform(0, raw)
 
 
+# ---------- Tier 1: static (curl_cffi) ----------
+
+
+async def _fetch_static(
+    url: str,
+    proxy: Optional[str] = None,
+    timeout: int = 25,
+) -> FetchResult:
+    """Browser-grade TLS fingerprint. Returns a FetchResult. Does not raise on 4xx/5xx."""
+    async with AsyncSession() as s:
+        r = await s.get(
+            url,
+            impersonate="chrome",
+            headers=_DEFAULT_HEADERS,
+            proxies=_proxy_for_curl(proxy),
+            timeout=timeout,
+            allow_redirects=True,
+        )
+        headers = {k.lower(): v for k, v in r.headers.items()}
+        return FetchResult(
+            body=r.text,
+            status=r.status_code,
+            raw=r.content,
+            headers=headers,
+            content_type=headers.get("content-type", ""),
+        )
+
+
