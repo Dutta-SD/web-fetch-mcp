@@ -523,3 +523,36 @@ def _shutdown() -> None:
 atexit.register(_shutdown)
 
 
+# ---------- escalation orchestrator ----------
+
+
+async def _attempt(coro_factory, satisfactory, max_retries: int) -> Optional[FetchResult]:
+    """Run one strategy with retry+backoff. Returns the FetchResult if satisfactory, else None.
+
+    coro_factory: zero-arg callable returning a fresh awaitable -> FetchResult
+    satisfactory: (FetchResult) -> bool  (True means 'good content, stop')
+    """
+    for attempt in range(max_retries + 1):
+        result: Optional[FetchResult] = None
+        try:
+            result = await coro_factory()
+        except Exception as e:  # noqa: BLE001 — network/launch error
+            log.info("strategy attempt %d errored: %s", attempt, e)
+            if attempt < max_retries:
+                await asyncio.sleep(_backoff_delay(attempt))
+                continue
+            return None
+        if satisfactory(result):
+            return result
+        log.info(
+            "strategy attempt %d unsatisfactory (status=%s, blocked=%s)",
+            attempt,
+            result.status,
+            _is_blocked(result.body, result.status),
+        )
+        if attempt < max_retries:
+            ra = _retry_after_delay(result.headers)
+            await asyncio.sleep(ra if ra is not None else _backoff_delay(attempt))
+    return None
+
+
