@@ -106,3 +106,46 @@ class FetchResult:
     content_type: str = ""
 
 
+# ---------- block / challenge detection ----------
+
+# Lowercased substrings that appear in anti-bot interstitials. Kept conservative
+# to avoid false positives on legitimate pages that merely discuss these topics.
+_BLOCK_MARKERS = (
+    "pardon our interruption",
+    "access denied",
+    "you have been blocked",
+    "just a moment...",  # Cloudflare interstitial
+    "attention required! | cloudflare",
+    "cf-browser-verification",
+    "cf-challenge-running",
+    "/cdn-cgi/challenge-platform",  # Cloudflare Turnstile/JS challenge
+    "_cf_chl_opt",
+    "challenge-error-text",
+    "verify you are human",
+    "verifying you are human",
+    "px-captcha",  # PerimeterX / HUMAN
+    "please enable javascript and cookies to continue",
+    "datadome",  # DataDome challenge payload
+    "incapsula incident id",  # Imperva
+    "request unsuccessful. incapsula",
+    "ddos protection by",
+    "please wait for verification",  # Reddit / shreddit verification gate
+    "checking your browser before accessing",  # classic anti-bot interstitial
+    "checking if the site connection is secure",  # Cloudflare "Just a moment" body
+)
+
+
+def _is_blocked(html: str, status: int) -> bool:
+    """True if the response is an anti-bot block/challenge rather than content.
+
+    Catches both hard blocks (403/429) and soft blocks (Akamai et al. return
+    HTTP 200 with a block body to fool naive scrapers).
+    """
+    if status in (401, 403, 429) or status == 503:
+        return True
+    if not html:
+        return False
+    head = html[:30_000].lower()
+    return any(marker in head for marker in _BLOCK_MARKERS)
+
+
