@@ -273,3 +273,37 @@ def _proxy_for_playwright(proxy: Optional[str]) -> Optional[dict]:
     return out
 
 
+# ---------- backoff ----------
+
+
+def _retry_after_delay(headers: dict) -> Optional[float]:
+    """Parse a Retry-After header into a capped, non-negative wait in seconds.
+
+    Accepts integer seconds or an HTTP-date. Returns None when the header is
+    absent or unparseable. Capped at _RETRY_AFTER_CAP so a hostile/huge value
+    cannot stall the tool.
+    """
+    raw = headers.get("retry-after")
+    if not raw:
+        return None
+    raw = raw.strip()
+    if raw.isdigit():
+        return min(float(raw), _RETRY_AFTER_CAP)
+    try:
+        when = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    delta = (when - datetime.now(timezone.utc)).total_seconds()
+    return min(max(delta, 0.0), _RETRY_AFTER_CAP)
+
+
+def _backoff_delay(attempt: int) -> float:
+    """Exponential backoff with full jitter."""
+    raw = min(_BACKOFF_CAP, _BACKOFF_BASE * (2**attempt))
+    return random.uniform(0, raw)
+
+
