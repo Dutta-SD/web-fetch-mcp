@@ -34,15 +34,36 @@ Imperva, …). Transient failures retry with exponential backoff + jitter
   `screenshot`.
 - **`screenshot`** — render a page in real Chrome and return a PNG.
 
+## Architecture
+
+A layered package (`src/web_fetch_mcp/`), dependencies pointing inward:
+
+```
+controller  (FastMCP tools, lifespan)        controller/app.py
+   -> service   (retry decorator, strategy registry, escalation, facade)
+        -> accessor  (curl_cffi / Patchright / nodriver, BrowserManager)
+             -> core   (models, config, detection, rendering, proxy, backoff)
+```
+
+- **Strategy** — the three tiers are interchangeable `async (request) -> FetchResult`
+  callables in a registry (`service/strategies.py`).
+- **Chain of Responsibility** (intent) — `auto` mode walks the tiers cheapest-first,
+  escalating until one yields usable content (`service/escalation.py`).
+- **Decorator** — `with_retry` adds exponential-backoff + Retry-After to any tier
+  (`service/retry.py`), hand-rolled on the stdlib (no `tenacity`).
+- **Manager** — `BrowserManager` owns one reused Chromium and closes it on the
+  FastMCP lifespan shutdown (`accessor/browser.py`).
+
 ## Quickstart
 
 ```bash
 uv sync
-uv run mcp install server.py    # or run directly: uv run python server.py
+uv pip install -e .        # installs the `web-fetch-mcp` console command
+web-fetch-mcp              # run the stdio MCP server
 ```
 
-Add to an MCP client (e.g. Claude Desktop) as a stdio server pointing at
-`server.py`.
+Add to an MCP client (e.g. Claude Desktop) as a stdio server that runs the
+`web-fetch-mcp` command (or `python -m web_fetch_mcp.controller.app`).
 
 ```python
 fetch("https://example.com/article", output="article")   # clean main content
