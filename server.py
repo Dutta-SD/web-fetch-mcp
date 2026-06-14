@@ -196,3 +196,56 @@ def _to_output(html: str, fmt: str) -> str:
 _IMAGE_MAGIC = (b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"RIFF", b"BM", b"\x00\x00\x01\x00")
 
 
+def _detect_content_type(result: FetchResult) -> str:
+    """Classify a fetch result as html | json | pdf | image (header, then sniff)."""
+    ct = (result.content_type or "").lower()
+    if "application/pdf" in ct:
+        return "pdf"
+    if "json" in ct:
+        return "json"
+    if ct.startswith("image/"):
+        return "image"
+    # An explicit HTML/XHTML header is definitive — don't sniff a body that may
+    # legitimately start with '{' (e.g. inline JSON-LD) into being JSON.
+    if "html" in ct:
+        return "html"
+    # sniff body/raw when header is missing or generic (octet-stream, text/plain)
+    raw = result.raw
+    if raw:
+        if raw.startswith(b"%PDF-"):
+            return "pdf"
+        if any(raw.startswith(m) for m in _IMAGE_MAGIC):
+            return "image"
+    stripped = result.body.lstrip()
+    if stripped[:1] in ("{", "["):
+        return "json"
+    return "html"
+
+
+def _render_by_type(result: FetchResult, output: str) -> str:
+    """Render a FetchResult per its detected content type.
+
+    JSON -> pretty-printed; PDF -> extracted text; image -> a 'use screenshot'
+    note; html -> the normal _to_output path (incl. article mode).
+    """
+    kind = _detect_content_type(result)
+    if kind == "json":
+        try:
+            return json.dumps(json.loads(result.body), indent=2, ensure_ascii=False)
+        except (ValueError, TypeError):
+            return result.body
+    if kind == "pdf":
+        try:
+            reader = pypdf.PdfReader(io.BytesIO(result.raw or b""))
+            text = "\n\n".join((page.extract_text() or "") for page in reader.pages)
+        except Exception as e:  # noqa: BLE001 — corrupt/empty PDF is a real failure
+            raise FetchBlocked(
+                f"could not extract text from PDF ({type(e).__name__})"
+            ) from e
+        return text.strip()
+    if kind == "image":
+        ct = result.content_type or "image"
+        return f"[{ct} — use the screenshot tool to view this URL]"
+    return _to_output(result.body, output)
+
+
