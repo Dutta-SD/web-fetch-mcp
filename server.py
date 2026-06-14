@@ -335,3 +335,107 @@ async def _fetch_static(
         )
 
 
+# ---------- Tier 2: dynamic (Patchright + reused browser) ----------
+
+_pw: Optional[Playwright] = None
+_browser: Optional[Browser] = None
+_browser_lock = asyncio.Lock()
+
+
+async def _get_browser() -> Browser:
+    """Lazy-init a single Patchright Chromium, reused across calls.
+
+    Launch order: real Chrome headful -> real Chrome headless -> bundled chromium.
+    """
+    global _pw, _browser
+    async with _browser_lock:
+        if _browser is None or not _browser.is_connected():
+            if _pw is None:
+                _pw = await async_playwright().start()
+            attempts = (
+                [] if _HEADLESS else [{"headless": False, "channel": "chrome"}]
+            ) + [
+                {"headless": True, "channel": "chrome"},
+                {"headless": True},
+            ]
+            last_err: Optional[Exception] = None
+            for kw in attempts:
+                try:
+                    log.info("launching patchright chromium %s", kw)
+                    _browser = await _pw.chromium.launch(**kw)
+                    break
+                except Exception as e:  # noqa: BLE001
+                    last_err = e
+                    log.warning("launch %s failed: %s", kw, e)
+            if _browser is None:
+                raise RuntimeError(f"could not launch any chromium: {last_err}")
+        return _browser
+
+
+def _normalize_selectors(sel) -> list[str]:
+    """Normalize a dismiss/expand selector arg to a list of selector strings."""
+    if sel is None:
+        return []
+    if isinstance(sel, str):
+        return [sel]
+    return list(sel)
+
+
+async def _open_page(
+    ctx,
+    url: str,
+    wait_ms: int,
+    dismiss_selector: str | list[str] | None,
+    timeout_ms: int = 30_000,
+) -> tuple[object, int]:
+    """Navigate, wait, optionally dismiss a blocker. Returns (page, status)."""
+    page = await ctx.new_page()
+    status = 0
+    try:
+        resp = await page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+        status = resp.status if resp else 0
+    except Exception as e:
+        log.warning("networkidle failed (%s); retrying with domcontentloaded", e)
+        resp = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+        status = resp.status if resp else 0
+
+    if wait_ms > 0:
+        await page.wait_for_timeout(wait_ms)
+
+    for sel in _normalize_selectors(dismiss_selector):
+        try:
+            await page.click(sel, timeout=3000)
+            log.info("clicked element matching %r", sel)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=10_000)
+            except Exception:
+                pass
+            await page.wait_for_timeout(1500)
+            break  # first match wins
+        except Exception as e:
+            log.info("selector %r not clickable (%s); continuing", sel, e)
+
+    return page, status
+
+
+async def _fetch_dynamic(
+    url: str,
+    wait_ms: int = 2000,
+    dismiss_selector: str | list[str] | None = None,
+    timeout_ms: int = 30_000,
+    proxy: Optional[str] = None,
+) -> FetchResult:
+    browser = await _get_browser()
+    ctx = await browser.new_context(
+        viewport={"width": 1920, "height": 1080},
+        locale="en-US",
+        timezone_id="America/New_York",
+        proxy=_proxy_for_playwright(proxy),
+    )
+    try:
+        page, status = await _open_page(ctx, url, wait_ms, dismiss_selector, timeout_ms)
+        return FetchResult(body=await page.content(), status=status)
+    finally:
+        await ctx.close()
+
+
