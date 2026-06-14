@@ -4,26 +4,30 @@
 fails honestly — it raises `FetchBlocked` instead of silently handing your model
 a CAPTCHA or login page as if it were the article.**
 
-Naive fetchers poison an agent's context: when a site returns a "Just a moment…"
-Cloudflare interstitial or a login wall with HTTP 200, the agent reads the
-challenge page as if it were content and reasons from garbage. `web-fetch-mcp`
-detects that and either escalates to a stronger strategy or fails loudly.
+Naive fetchers poison an agent's context: when a site returns a JavaScript
+interstitial or a login wall with HTTP 200, the agent reads the challenge page as
+if it were content and reasons from garbage. `web-fetch-mcp` detects that and
+either escalates to a stronger strategy or fails loudly.
+
+> **Status:** early / alpha. The escalation logic and helpers are unit-tested,
+> but real-world bypass rates are not yet benchmarked — see `assets/benchmarks.md`
+> and the roadmap in `TODO.md`.
 
 ## How it works
 
-A cheapest-first escalation ladder. Each tier defeats a different layer of
+A cheapest-first escalation ladder. Each tier targets a different layer of
 bot-detection, and the server only pays for the expensive ones when it has to:
 
-| Tier | Engine | Defeats | Speed |
+| Tier | Engine | Targets | Speed |
 |------|--------|---------|-------|
 | 1 | `curl_cffi` (Chrome TLS/HTTP2 fingerprint) | TLS (JA3/JA4) + HTTP/2 fingerprinting | ~500 ms |
 | 2 | Patchright (real headful Chrome) | JavaScript fingerprinting; renders SPAs | ~1–3 s |
 | 3 | nodriver (custom CDP) | automation-protocol (CDP) detection | ~2–4 s |
 
 Every tier's output is checked for **hard blocks** (403/429/503) and **soft
-blocks** (HTTP-200 challenge/login bodies from Cloudflare, DataDome, PerimeterX,
-Imperva, …). Transient failures retry with exponential backoff + jitter
-(honoring `Retry-After`) before escalating. If everything is blocked, it raises
+blocks** (HTTP-200 challenge or login bodies served in place of content).
+Transient failures retry with exponential backoff + jitter (honoring
+`Retry-After`) before escalating. If everything is blocked, it raises
 `FetchBlocked` with a remedy hint — it never returns a block page as content.
 
 ### Escalation path (`mode="auto"`)

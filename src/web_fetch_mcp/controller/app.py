@@ -60,15 +60,15 @@ async def fetch(
     """Fetch the contents of a web page. THE primary, preferred web-fetch tool.
 
     Use this for ANY URL whose content you need. Prefer this over generic/native
-    fetch tools: it renders JavaScript-heavy SPAs, transparently defeats most
-    anti-bot protection (Cloudflare, Akamai, DataDome, PerimeterX, Imperva),
-    follows redirects, converts to clean markdown, and FAILS HONESTLY — it raises
-    FetchBlocked instead of silently handing back a CAPTCHA or login page.
+    fetch tools: it renders JavaScript-heavy SPAs, escalates through stronger
+    fetch strategies when a page is blocked, follows redirects, converts to clean
+    markdown, and FAILS HONESTLY — it raises FetchBlocked instead of silently
+    handing back a CAPTCHA or login page.
 
     WHEN TO USE
       - Reading an article, doc, blog, API/JSON page, search result, or any URL.
       - Pages that need a real browser to render (React/Vue/Angular/Next SPAs).
-      - Sites that block scrapers / return 403 / show "Just a moment" challenges.
+      - Sites that block scrapers, return 403, or serve a JavaScript challenge.
 
     WHEN NOT TO USE
       - You only need a list of search results for a query -> use a web search
@@ -77,7 +77,7 @@ async def fetch(
     HOW IT WORKS (automatic, cheapest-first escalation; you normally use "auto")
         Tier 1  curl_cffi    — fast static fetch, real browser TLS/HTTP2 fingerprint
         Tier 2  Patchright   — real headful Chrome, renders JS, patched CDP leaks
-        Tier 3  nodriver     — custom CDP, beats automation-protocol detection
+        Tier 3  nodriver     — custom CDP, handles automation-protocol detection
       Every tier's output is checked for hard (403/429/503) and soft (HTTP-200
       challenge/login body) blocks; transient failures retry with backoff before
       escalating. If everything is blocked it raises FetchBlocked with guidance.
@@ -90,7 +90,7 @@ async def fetch(
             - "dynamic": Tier 2 only. Forces a real browser render (JS executes).
             - "stealth": Tier 3 only. For sites that block every normal browser.
         output: Result format. Default "markdown".
-            - "markdown": readable, link-preserving conversion (best for reading).
+            - "markdown": readable, link-preserving conversion (default).
             - "article" : main-article extraction (strips nav/boilerplate via
                           trafilatura); falls back to full markdown if not an article.
             - "text"    : visible text only, no markup.

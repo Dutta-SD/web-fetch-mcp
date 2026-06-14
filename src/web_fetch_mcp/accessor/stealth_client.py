@@ -1,4 +1,4 @@
-"""Tier 3: stealth render via nodriver (custom CDP, beats automation detection)."""
+"""Tier 3: stealth render via nodriver (custom CDP, for automation-protocol detection)."""
 
 from __future__ import annotations
 

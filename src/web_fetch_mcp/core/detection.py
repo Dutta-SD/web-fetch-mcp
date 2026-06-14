@@ -13,31 +13,32 @@ import re
 from web_fetch_mcp.core.config import BLOCK_SCAN_LIMIT
 from web_fetch_mcp.core.rendering import make_soup
 
-# Lower-cased substrings that appear in anti-bot interstitials. Kept conservative
-# to avoid false positives on legitimate pages that merely discuss these topics.
-# TODO: Replace with intelligence
+# Lower-cased substrings that appear verbatim in common anti-bot/challenge
+# interstitials. These are literal page-body signatures the detector searches
+# for; kept conservative to avoid false positives on pages that merely discuss
+# these topics. (A future ML page-state classifier can supersede this list.)
 BLOCK_MARKERS: tuple[str, ...] = (
     "pardon our interruption",
     "access denied",
     "you have been blocked",
-    "just a moment...",  # Cloudflare interstitial
-    "attention required! | cloudflare",
+    "just a moment...",  # JS challenge interstitial
+    "attention required!",
     "cf-browser-verification",
     "cf-challenge-running",
-    "/cdn-cgi/challenge-platform",  # Cloudflare Turnstile/JS challenge
+    "/cdn-cgi/challenge-platform",  # JS/Turnstile challenge asset path
     "_cf_chl_opt",
     "challenge-error-text",
     "verify you are human",
     "verifying you are human",
-    "px-captcha",  # PerimeterX / HUMAN
+    "px-captcha",  # captcha challenge widget
     "please enable javascript and cookies to continue",
-    "datadome",  # DataDome challenge payload
-    "incapsula incident id",  # Imperva
+    "datadome",  # challenge payload identifier
+    "incapsula incident id",  # WAF block identifier
     "request unsuccessful. incapsula",
     "ddos protection by",
-    "please wait for verification",  # Reddit / shreddit verification gate
+    "please wait for verification",  # JS verification gate
     "checking your browser before accessing",  # classic anti-bot interstitial
-    "checking if the site connection is secure",  # Cloudflare "Just a moment" body
+    "checking if the site connection is secure",  # JS challenge body
 )
 
 # Empty single-page-app mount-point divs, indicating client-side rendering.
@@ -52,8 +53,8 @@ SPA_SHELL_PATTERNS: list[re.Pattern[str]] = [
 def is_blocked(html: str, status: int) -> bool:
     """Report whether a response is an anti-bot block/challenge, not content.
 
-    Catches both hard blocks (401/403/429/503) and soft blocks, where services
-    such as Akamai return HTTP 200 with a challenge body to fool naive scrapers.
+    Catches both hard blocks (401/403/429/503) and soft blocks, where a site
+    returns HTTP 200 with a challenge body in place of content to fool scrapers.
 
     Args:
         html: The response body.
