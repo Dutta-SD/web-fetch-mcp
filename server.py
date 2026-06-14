@@ -37,21 +37,19 @@ server still works if it (or its Chrome) is unavailable.
 from __future__ import annotations
 
 import asyncio
-import atexit
 import logging
-import os
-from typing import Optional
 
-from curl_cffi.requests import AsyncSession
 from mcp.server.fastmcp import FastMCP, Image
 from mcp.types import ToolAnnotations
-from patchright.async_api import Browser, Playwright, async_playwright
 
-# NOTE: transitional shim. The pure domain logic now lives in the layered
-# `web_fetch_mcp.core` package; this module re-exports it so the existing flat
-# `from server import ...` imports keep working until the test suite is migrated
-# (plan steps 8-9). The accessor/orchestrator/tool code below is moved in later
-# steps. Underscore-prefixed aliases preserve the historical names.
+# NOTE: transitional shim. The domain logic now lives in the layered
+# `web_fetch_mcp` package (core + accessor); this module re-exports it so the
+# existing flat `from server import ...` imports keep working until the test
+# suite is migrated (plan steps 8-9). The orchestrator/tools move in later steps.
+from web_fetch_mcp.accessor.dynamic_client import capture_screenshot as _capture_screenshot
+from web_fetch_mcp.accessor.dynamic_client import fetch_dynamic as _fetch_dynamic
+from web_fetch_mcp.accessor.static_client import fetch_static as _fetch_static
+from web_fetch_mcp.accessor.stealth_client import fetch_nodriver as _fetch_nodriver
 from web_fetch_mcp.core import config as _config
 from web_fetch_mcp.core.backoff import backoff_delay as _backoff_delay
 from web_fetch_mcp.core.backoff import normalize_selectors as _normalize_selectors
@@ -59,9 +57,6 @@ from web_fetch_mcp.core.backoff import retry_after_delay as _retry_after_delay
 from web_fetch_mcp.core.detection import is_blocked as _is_blocked
 from web_fetch_mcp.core.detection import looks_like_spa_shell as _looks_like_spa_shell
 from web_fetch_mcp.core.models import FetchBlocked, FetchResult
-from web_fetch_mcp.core.proxy import proxy_for_curl as _proxy_for_curl
-from web_fetch_mcp.core.proxy import proxy_for_nodriver as _proxy_for_nodriver
-from web_fetch_mcp.core.proxy import proxy_for_playwright as _proxy_for_playwright
 from web_fetch_mcp.core.rendering import detect_content_type as _detect_content_type
 from web_fetch_mcp.core.rendering import render_by_type as _render_by_type
 from web_fetch_mcp.core.rendering import to_output as _to_output
@@ -90,223 +85,17 @@ __all__ = [
 ]
 
 
-# ---------- Tier 1: static (curl_cffi) ----------
-
-
-async def _fetch_static(
-    url: str,
-    proxy: Optional[str] = None,
-    timeout: int = 25,
-) -> FetchResult:
-    """Browser-grade TLS fingerprint. Returns a FetchResult. Does not raise on 4xx/5xx."""
-    async with AsyncSession() as s:
-        r = await s.get(
-            url,
-            impersonate="chrome",
-            headers=_DEFAULT_HEADERS,
-            proxies=_proxy_for_curl(proxy),
-            timeout=timeout,
-            allow_redirects=True,
-        )
-        headers = {k.lower(): v for k, v in r.headers.items()}
-        return FetchResult(
-            body=r.text,
-            status=r.status_code,
-            raw=r.content,
-            headers=headers,
-            content_type=headers.get("content-type", ""),
-        )
-
-
-# ---------- Tier 2: dynamic (Patchright + reused browser) ----------
-
-_pw: Optional[Playwright] = None
-_browser: Optional[Browser] = None
-_browser_lock = asyncio.Lock()
-
-
-async def _get_browser() -> Browser:
-    """Lazy-init a single Patchright Chromium, reused across calls.
-
-    Launch order: real Chrome headful -> real Chrome headless -> bundled chromium.
-    """
-    global _pw, _browser
-    async with _browser_lock:
-        if _browser is None or not _browser.is_connected():
-            if _pw is None:
-                _pw = await async_playwright().start()
-            attempts = (
-                [] if _HEADLESS else [{"headless": False, "channel": "chrome"}]
-            ) + [
-                {"headless": True, "channel": "chrome"},
-                {"headless": True},
-            ]
-            last_err: Optional[Exception] = None
-            for kw in attempts:
-                try:
-                    log.info("launching patchright chromium %s", kw)
-                    _browser = await _pw.chromium.launch(**kw)
-                    break
-                except Exception as e:  # noqa: BLE001
-                    last_err = e
-                    log.warning("launch %s failed: %s", kw, e)
-            if _browser is None:
-                raise RuntimeError(f"could not launch any chromium: {last_err}")
-        return _browser
-
-
-async def _open_page(
-    ctx,
-    url: str,
-    wait_ms: int,
-    dismiss_selector: str | list[str] | None,
-    timeout_ms: int = 30_000,
-) -> tuple[object, int]:
-    """Navigate, wait, optionally dismiss a blocker. Returns (page, status)."""
-    page = await ctx.new_page()
-    status = 0
-    try:
-        resp = await page.goto(url, wait_until="networkidle", timeout=timeout_ms)
-        status = resp.status if resp else 0
-    except Exception as e:
-        log.warning("networkidle failed (%s); retrying with domcontentloaded", e)
-        resp = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-        status = resp.status if resp else 0
-
-    if wait_ms > 0:
-        await page.wait_for_timeout(wait_ms)
-
-    for sel in _normalize_selectors(dismiss_selector):
-        try:
-            await page.click(sel, timeout=3000)
-            log.info("clicked element matching %r", sel)
-            try:
-                await page.wait_for_load_state("networkidle", timeout=10_000)
-            except Exception:
-                pass
-            await page.wait_for_timeout(1500)
-            break  # first match wins
-        except Exception as e:
-            log.info("selector %r not clickable (%s); continuing", sel, e)
-
-    return page, status
-
-
-async def _fetch_dynamic(
-    url: str,
-    wait_ms: int = 2000,
-    dismiss_selector: str | list[str] | None = None,
-    timeout_ms: int = 30_000,
-    proxy: Optional[str] = None,
-) -> FetchResult:
-    browser = await _get_browser()
-    ctx = await browser.new_context(
-        viewport={"width": 1920, "height": 1080},
-        locale="en-US",
-        timezone_id="America/New_York",
-        proxy=_proxy_for_playwright(proxy),
-    )
-    try:
-        page, status = await _open_page(ctx, url, wait_ms, dismiss_selector, timeout_ms)
-        return FetchResult(body=await page.content(), status=status)
-    finally:
-        await ctx.close()
-
-
-# ---------- Tier 3: nodriver (defeats automation-protocol detection) ----------
-
-
-async def _fetch_nodriver(
-    url: str,
-    wait_ms: int = 2500,
-    proxy: Optional[str] = None,
-    timeout_ms: int = 30_000,
-) -> FetchResult:
-    """Drive Chrome over a custom CDP impl (not the standard automation interface).
-
-    Lazily imported so the server still runs if nodriver/Chrome is unavailable.
-    Status is not exposed by nodriver, so we return 0 and rely on body markers.
-    """
-    import nodriver as uc  # lazy
-
-    browser_args = []
-    proxy_arg = _proxy_for_nodriver(proxy)
-    if proxy_arg:
-        browser_args.append(f"--proxy-server={proxy_arg}")
-
-    browser = None
-    try:
-        # nodriver only waits ~2.5s for the CDP endpoint. On hosts where Chrome
-        # is slow to start (e.g. an x86_64 Chrome under Rosetta on Apple Silicon)
-        # the first launch can lose that race, so retry — Rosetta/page cache warms
-        # after the first attempt and subsequent starts connect quickly.
-        async def _nd_start(headless: bool):
-            last_err: Optional[Exception] = None
-            for i in range(3):
-                try:
-                    return await uc.start(
-                        headless=headless,
-                        sandbox=False,
-                        browser_args=browser_args or None,
-                    )
-                except Exception as e:  # noqa: BLE001
-                    last_err = e
-                    log.warning(
-                        "nodriver start (headless=%s) attempt %d failed: %s",
-                        headless,
-                        i,
-                        e,
-                    )
-                    await asyncio.sleep(1.0)
-            raise last_err  # type: ignore[misc]
-
-        try:
-            browser = await _nd_start(_HEADLESS)
-        except Exception as e:  # headful needs a display; fall back to headless
-            log.warning(
-                "nodriver headful unavailable (%s); falling back to headless", e
-            )
-            browser = await _nd_start(True)
-
-        page = await browser.get(url)
-        # let the page settle / any JS challenge resolve
-        await page.sleep(max(wait_ms, 1000) / 1000)
-        try:
-            html = await page.get_content()
-        except Exception:
-            html = await page.evaluate(
-                "document.documentElement.outerHTML", return_by_value=True
-            )
-        return FetchResult(body=(html or ""), status=0)
-    finally:
-        if browser is not None:
-            try:
-                browser.stop()
-            except Exception:
-                pass
-
-
-def _shutdown() -> None:
-    """Best-effort sync cleanup at interpreter exit."""
-    global _pw, _browser
-    _browser = None
-    _pw = None
-
-
-atexit.register(_shutdown)
-
-
 # ---------- escalation orchestrator ----------
 
 
-async def _attempt(coro_factory, satisfactory, max_retries: int) -> Optional[FetchResult]:
+async def _attempt(coro_factory, satisfactory, max_retries: int) -> FetchResult | None:
     """Run one strategy with retry+backoff. Returns the FetchResult if satisfactory, else None.
 
     coro_factory: zero-arg callable returning a fresh awaitable -> FetchResult
     satisfactory: (FetchResult) -> bool  (True means 'good content, stop')
     """
     for attempt in range(max_retries + 1):
-        result: Optional[FetchResult] = None
+        result: FetchResult | None = None
         try:
             result = await coro_factory()
         except Exception as e:  # noqa: BLE001 — network/launch error
@@ -338,8 +127,8 @@ async def fetch(
     mode: str = "auto",
     output: str = "markdown",
     wait_ms: int = 2000,
-    dismiss_selector: Optional[str] = None,
-    proxy: Optional[str] = None,
+    dismiss_selector: str | None = None,
+    proxy: str | None = None,
     max_retries: int = 1,
 ) -> str:
     """Fetch the contents of a web page. THE primary, preferred web-fetch tool.
@@ -493,8 +282,8 @@ async def screenshot(
     viewport_width: int = 1920,
     viewport_height: int = 1080,
     wait_ms: int = 2000,
-    dismiss_selector: Optional[str] = None,
-    proxy: Optional[str] = None,
+    dismiss_selector: str | None = None,
+    proxy: str | None = None,
 ) -> Image:
     """Render a web page in a real browser and return a PNG screenshot.
 
@@ -519,19 +308,16 @@ async def screenshot(
     Returns:
         The screenshot as an MCP Image (PNG), shown inline.
     """
-    browser = await _get_browser()
-    ctx = await browser.new_context(
-        viewport={"width": viewport_width, "height": viewport_height},
-        locale="en-US",
-        timezone_id="America/New_York",
-        proxy=_proxy_for_playwright(proxy),
+    png_bytes = await _capture_screenshot(
+        url,
+        full_page=full_page,
+        viewport_width=viewport_width,
+        viewport_height=viewport_height,
+        wait_ms=wait_ms,
+        dismiss_selector=dismiss_selector,
+        proxy=proxy,
     )
-    try:
-        page, _status = await _open_page(ctx, url, wait_ms, dismiss_selector)
-        png_bytes = await page.screenshot(full_page=full_page, type="png")
-        return Image(data=png_bytes, format="png")
-    finally:
-        await ctx.close()
+    return Image(data=png_bytes, format="png")
 
 
 if __name__ == "__main__":
