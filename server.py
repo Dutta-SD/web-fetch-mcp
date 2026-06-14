@@ -172,3 +172,27 @@ def _looks_like_spa_shell(html: str) -> bool:
     return len(text) < 500 and scripts > 3
 
 
+# ---------- output formatting ----------
+
+
+def _to_output(html: str, fmt: str) -> str:
+    if fmt == "html":
+        return html
+    if fmt == "text":
+        try:
+            return BeautifulSoup(html, "lxml").get_text("\n", strip=True)
+        except Exception:
+            return BeautifulSoup(html, "html.parser").get_text("\n", strip=True)
+    if fmt == "article":
+        extracted = trafilatura.extract(html, output_format="markdown")
+        if extracted and extracted.strip():
+            return extracted.strip()
+        # not an article (homepage/listing/etc.) -> fall back to full markdown
+        return to_md(html, heading_style="ATX")
+    return to_md(html, heading_style="ATX")
+
+
+# Known image magic-byte prefixes for content sniffing.
+_IMAGE_MAGIC = (b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"RIFF", b"BM", b"\x00\x00\x01\x00")
+
+
