@@ -90,3 +90,19 @@ class FetchBlocked(Exception):
     """Raised when every strategy was blocked or failed."""
 
 
+@dataclass
+class FetchResult:
+    """Result of a single fetch attempt from any tier.
+
+    Tier 1 (curl_cffi) populates all fields. Browser tiers (Patchright/nodriver)
+    only ever yield rendered HTML, so they fill body/status and leave raw=None,
+    headers={} — the PDF/JSON/image paths never apply to them.
+    """
+
+    body: str
+    status: int
+    raw: bytes | None = None
+    headers: dict = field(default_factory=dict)
+    content_type: str = ""
+
+
