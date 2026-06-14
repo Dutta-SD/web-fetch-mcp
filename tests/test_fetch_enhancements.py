@@ -17,6 +17,10 @@ from web_fetch_mcp.core.config import RETRY_AFTER_CAP
 from web_fetch_mcp.core.detection import is_blocked
 from web_fetch_mcp.core.models import FetchBlocked, FetchResult
 from web_fetch_mcp.core.rendering import detect_content_type, render_by_type, to_output
+from web_fetch_mcp.service import strategies
+from web_fetch_mcp.service.escalation import build_auto_chain, escalate
+from web_fetch_mcp.service.fetcher import fetch_url
+from web_fetch_mcp.service.request import FetchRequest
 from web_fetch_mcp.service.retry import with_retry
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
@@ -134,8 +138,22 @@ def test_detect_json_by_header():
 
 
 def test_detect_json_by_sniff():
-    r = FetchResult(body='  {"a": 1}', status=200)
+    # Body-sniffing only applies to static-tier responses, which always carry
+    # raw bytes (a missing/generic Content-Type header, JSON-looking body).
+    body = '  {"a": 1}'
+    r = FetchResult(body=body, status=200, raw=body.encode())
     assert detect_content_type(r) == "json"
+
+
+def test_browser_tier_json_like_body_is_html_not_json():
+    """A browser-tier result (raw=None) starting with '{'/'[' must stay HTML.
+
+    Browser tiers bypassed content-type detection before the refactor; gating
+    the body-sniff on raw bytes preserves that — they are never mis-rendered as
+    pretty-printed JSON regardless of how the rendered DOM serializes.
+    """
+    r = FetchResult(body="[1, 2, 3]", status=0, raw=None)
+    assert detect_content_type(r) == "html"
 
 
 def test_detect_pdf_by_magic():
@@ -241,3 +259,86 @@ def test_normalize_selectors_variants():
     assert normalize_selectors(None) == []
     assert normalize_selectors("text=More") == ["text=More"]
     assert normalize_selectors(["a", "b"]) == ["a", "b"]
+
+
+# ---------- service orchestration: chain building ----------
+
+
+def test_build_auto_chain_full_order_without_dismiss():
+    chain = build_auto_chain(None)
+    assert [t.name for t in chain] == ["static", "dynamic", "stealth"]
+
+
+def test_build_auto_chain_drops_static_when_dismiss_selector():
+    # The static tier cannot click overlays, so a dismiss_selector drops it.
+    chain = build_auto_chain("text=Accept")
+    assert [t.name for t in chain] == ["dynamic", "stealth"]
+
+
+# ---------- service orchestration: escalation ----------
+
+
+def test_escalate_skips_static_spa_shell_and_uses_dynamic(monkeypatch):
+    """An unrendered SPA shell is 'not blocked' yet must escalate static->dynamic.
+
+    Pins that escalate() applies the strict _static_ok predicate to the static
+    tier (so an empty mount-point shell is treated as insufficient).
+    """
+    shell = FetchResult(body='<html><body><div id="root"></div></body></html>', status=200)
+    rendered = FetchResult(body="<html><body><h1>Real content here</h1></body></html>", status=200)
+
+    async def fake_static(req):
+        return shell
+
+    async def fake_dynamic(req):
+        return rendered
+
+    monkeypatch.setattr(strategies, "_run_static", fake_static)
+    monkeypatch.setattr(strategies, "_run_dynamic", fake_dynamic)
+
+    chain = [strategies.Tier("static", fake_static, strategies._not_blocked),
+             strategies.Tier("dynamic", fake_dynamic, strategies._not_blocked)]
+    result = asyncio.run(
+        escalate(FetchRequest(url="https://x"), max_retries=0, chain=chain)
+    )
+    assert result is rendered
+
+
+def test_escalate_raises_fetchblocked_when_all_tiers_fail():
+    blocked = FetchResult(body="", status=403)
+
+    async def fake_blocked(req):
+        return blocked
+
+    chain = [strategies.Tier("static", fake_blocked, strategies._not_blocked)]
+    with pytest.raises(FetchBlocked):
+        asyncio.run(escalate(FetchRequest(url="https://x"), max_retries=0, chain=chain))
+
+
+# ---------- service orchestration: fetch_url facade validation ----------
+
+
+def test_fetch_url_rejects_invalid_mode():
+    with pytest.raises(ValueError, match="mode must be"):
+        asyncio.run(fetch_url("https://x", mode="bogus"))
+
+
+def test_fetch_url_rejects_invalid_output():
+    with pytest.raises(ValueError, match="output must be"):
+        asyncio.run(fetch_url("https://x", output="bogus"))
+
+
+def test_fetch_url_rejects_dismiss_selector_with_static_mode():
+    with pytest.raises(ValueError, match="dismiss_selector requires a browser mode"):
+        asyncio.run(fetch_url("https://x", mode="static", dismiss_selector="text=Accept"))
+
+
+def test_fetch_url_single_tier_blocked_raises_fetchblocked(monkeypatch):
+    async def fake_blocked(req):
+        return FetchResult(body="", status=403)
+
+    # Tier is frozen, so swap the whole registry entry rather than mutate it.
+    patched = strategies.Tier("static", fake_blocked, strategies._not_blocked)
+    monkeypatch.setitem(strategies.TIERS, "static", patched)
+    with pytest.raises(FetchBlocked):
+        asyncio.run(fetch_url("https://x", mode="static", max_retries=0))

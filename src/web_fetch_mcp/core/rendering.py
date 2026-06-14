@@ -85,16 +85,18 @@ def detect_content_type(result: FetchResult) -> str:
     # legitimately start with '{' (e.g. inline JSON-LD) into being JSON.
     if "html" in ct:
         return "html"
-    # Sniff body/raw when the header is missing or generic (octet-stream/plain).
+    # Sniff only when we have raw bytes — i.e. a static-tier response with a
+    # missing/generic header (octet-stream, text/plain). Browser tiers set
+    # raw=None and are therefore always classified as HTML, matching the
+    # pre-refactor behavior where browser results bypassed content-type detection.
     raw = result.raw
     if raw:
         if raw.startswith(b"%PDF-"):
             return "pdf"
         if any(raw.startswith(m) for m in IMAGE_MAGIC):
             return "image"
-    stripped = result.body.lstrip()
-    if stripped[:1] in ("{", "["):
-        return "json"
+        if result.body.lstrip()[:1] in ("{", "["):
+            return "json"
     return "html"
 
 
