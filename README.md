@@ -32,29 +32,10 @@ Transient failures retry with exponential backoff + jitter (honoring
 
 ### Escalation path (`mode="auto"`)
 
-```mermaid
-flowchart TD
-    A["fetch(url)"] --> B{dismiss_selector set?}
-    B -- "no" --> T1["Tier 1 · curl_cffi<br/>static fetch"]
-    B -- "yes (can't click)" --> T2
-
-    T1 --> C1{blocked or<br/>empty SPA shell?}
-    C1 -- "no" --> OK["render_by_type → return"]
-    C1 -- "yes, escalate" --> T2["Tier 2 · Patchright<br/>headful Chrome, JS render"]
-
-    T2 --> C2{blocked?}
-    C2 -- "no" --> OK
-    C2 -- "yes, escalate" --> T3["Tier 3 · nodriver<br/>custom-CDP stealth"]
-
-    T3 --> C3{blocked?}
-    C3 -- "no" --> OK
-    C3 -- "yes" --> X["raise FetchBlocked<br/>(suggest residential proxy)"]
-
-    OK:::done
-    X:::fail
-    classDef done fill:#1f7a1f,color:#fff,stroke:#0d4d0d;
-    classDef fail fill:#a11,color:#fff,stroke:#600;
-```
+![Escalation path: fetch(url) tries Tier 1 (curl_cffi static), escalating to
+Tier 2 (Patchright headful Chrome) then Tier 3 (nodriver stealth) on a block or
+empty SPA shell; the first tier to return usable content is rendered, otherwise
+it raises FetchBlocked.](https://raw.githubusercontent.com/Dutta-SD/web-fetch-mcp/main/assets/escalation-path.svg)
 
 Each tier runs through `with_retry` (exponential backoff + jitter, honoring
 `Retry-After`) before the chain escalates. Tier 1 must clear the **strict** check
