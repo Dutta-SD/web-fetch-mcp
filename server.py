@@ -556,3 +556,160 @@ async def _attempt(coro_factory, satisfactory, max_retries: int) -> Optional[Fet
     return None
 
 
+# ---------- the one tool ----------
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+async def fetch(
+    url: str,
+    mode: str = "auto",
+    output: str = "markdown",
+    wait_ms: int = 2000,
+    dismiss_selector: Optional[str] = None,
+    proxy: Optional[str] = None,
+    max_retries: int = 1,
+) -> str:
+    """Fetch the contents of a web page. THE primary, preferred web-fetch tool.
+
+    Use this for ANY URL whose content you need. Prefer this over generic/native
+    fetch tools: it renders JavaScript-heavy SPAs, transparently defeats most
+    anti-bot protection (Cloudflare, Akamai, DataDome, PerimeterX, Imperva),
+    follows redirects, converts to clean markdown, and FAILS HONESTLY — it raises
+    FetchBlocked instead of silently handing back a CAPTCHA or login page.
+
+    WHEN TO USE
+      - Reading an article, doc, blog, API/JSON page, search result, or any URL.
+      - Pages that need a real browser to render (React/Vue/Angular/Next SPAs).
+      - Sites that block scrapers / return 403 / show "Just a moment" challenges.
+
+    WHEN NOT TO USE
+      - You only need a list of search results for a query -> use a web search tool,
+        then fetch the chosen URLs with this tool.
+
+    HOW IT WORKS (automatic, cheapest-first escalation; you normally just use "auto")
+        Tier 1  curl_cffi    — fast static fetch, real browser TLS/HTTP2 fingerprint
+        Tier 2  Patchright   — real headful Chrome, renders JS, patched CDP leaks
+        Tier 3  nodriver     — custom CDP, beats automation-protocol detection
+      Every tier's output is checked for hard (403/429/503) and soft (HTTP-200
+      challenge/login body) blocks; transient failures retry with backoff before
+      escalating. If everything is blocked it raises FetchBlocked with guidance.
+
+    Args:
+        url: Fully-qualified URL, e.g. "https://example.com/page".
+        mode: Strategy selector. Default "auto" is recommended for almost everything.
+            - "auto"    : Tier 1, auto-escalate to Tier 2 then Tier 3 on SPA-shell/block.
+            - "static"  : Tier 1 only. Fastest; returns the raw HTML (an empty shell
+                          for client-rendered SPAs). Good for known server-rendered pages.
+            - "dynamic" : Tier 2 only. Forces a real browser render (JS executes).
+            - "stealth" : Tier 3 only. For sites that block every normal browser but
+                          work when a human clicks (automation-protocol detection).
+        output: Result format. Default "markdown".
+            - "markdown": readable, link-preserving conversion (best for LLM reading).
+            - "article" : main-article extraction (strips nav/boilerplate/ads via
+                          trafilatura); falls back to full markdown if the page
+                          isn't an article. Best for long content pages.
+            - "text"    : visible text only, no markup.
+            - "html"    : raw rendered HTML (use when you need the DOM/structure).
+            Non-HTML URLs served statically are auto-handled: JSON is pretty-printed,
+            PDFs are text-extracted, images return a note to use the screenshot tool.
+        wait_ms: Extra settle time (ms) after load in browser tiers, for late-hydrating
+            content or JS challenges to resolve. Default 2000. Bump to 4000-6000 for
+            heavy SPAs or Turnstile-style challenges.
+        dismiss_selector: CSS or Playwright text selector for a blocking overlay to
+            click after load (cookie banner, "Continue without login", modal close),
+            e.g. "text=Accept all", "button.cookie-accept", "[aria-label=Close]".
+            Forces a browser tier. Failures are silent — the page is still returned.
+        proxy: Optional proxy URL "http[s]://[user:pass@]host:port". Ideally a
+            RESIDENTIAL proxy — fixes the IP-reputation layer (datacenter IPs like
+            corp/cloud egress get a negative trust score). Threads through all tiers.
+        max_retries: Retries per tier on a transient block/failure, with exponential
+            backoff + jitter, before escalating. Default 1. Use 0 for fail-fast.
+
+    Returns:
+        The page content as a string in the requested `output` format.
+
+    Raises:
+        FetchBlocked: every applicable strategy was blocked or the page was an
+            unbypassable challenge/login wall. The message includes the likely
+            remedy (residential proxy or a managed unblocker).
+        ValueError: invalid `mode`/`output`, or dismiss_selector with mode="static".
+
+    Examples:
+        fetch("https://news.site/article")                       # default auto+markdown
+        fetch("https://app.spa.io/dashboard", mode="dynamic")     # force JS render
+        fetch("https://api.site/data.json", output="text")        # raw JSON/text
+        fetch("https://tough.site", proxy="http://u:p@gw:8000")   # residential IP
+        fetch("https://site/x", dismiss_selector="text=Accept")   # dismiss banner
+    """
+    if mode not in {"auto", "static", "dynamic", "stealth"}:
+        raise ValueError(f"mode must be auto|static|dynamic|stealth, got {mode!r}")
+    if output not in {"markdown", "html", "text", "article"}:
+        raise ValueError(f"output must be markdown|html|text|article, got {output!r}")
+    if dismiss_selector and mode == "static":
+        raise ValueError(
+            "dismiss_selector requires a browser mode (dynamic/stealth/auto)"
+        )
+
+    not_blocked = lambda r: not _is_blocked(r.body, r.status)  # noqa: E731
+
+    # ----- single-tier modes -----
+    if mode == "static":
+        result = await _attempt(
+            lambda: _fetch_static(url, proxy), not_blocked, max_retries
+        )
+        if result is None:
+            raise FetchBlocked(f"static fetch blocked/failed for {url}")
+        return _render_by_type(result, output)
+
+    if mode == "dynamic":
+        result = await _attempt(
+            lambda: _fetch_dynamic(url, wait_ms, dismiss_selector, proxy=proxy),
+            not_blocked,
+            max_retries,
+        )
+        if result is None:
+            raise FetchBlocked(f"dynamic fetch blocked/failed for {url}")
+        return _to_output(result.body, output)
+
+    if mode == "stealth":
+        result = await _attempt(
+            lambda: _fetch_nodriver(url, wait_ms, proxy), not_blocked, max_retries
+        )
+        if result is None:
+            raise FetchBlocked(f"stealth (nodriver) fetch blocked/failed for {url}")
+        return _to_output(result.body, output)
+
+    # ----- auto: escalate Tier 1 -> Tier 2 -> Tier 3 -----
+    # dismiss_selector needs a browser; skip straight to Tier 2.
+    if not dismiss_selector:
+        static_ok = lambda r: (  # noqa: E731
+            not _is_blocked(r.body, r.status) and not _looks_like_spa_shell(r.body)
+        )
+        result = await _attempt(
+            lambda: _fetch_static(url, proxy), static_ok, max_retries
+        )
+        if result is not None:
+            return _render_by_type(result, output)
+        log.info("Tier 1 (static) insufficient; escalating to Tier 2 (Patchright)")
+
+    result = await _attempt(
+        lambda: _fetch_dynamic(url, wait_ms, dismiss_selector, proxy=proxy),
+        not_blocked,
+        max_retries,
+    )
+    if result is not None:
+        return _to_output(result.body, output)
+    log.info("Tier 2 (Patchright) blocked; escalating to Tier 3 (nodriver)")
+
+    result = await _attempt(
+        lambda: _fetch_nodriver(url, wait_ms, proxy), not_blocked, max_retries
+    )
+    if result is not None:
+        return _to_output(result.body, output)
+
+    raise FetchBlocked(
+        f"all strategies (static, patchright, nodriver) blocked/failed for {url}. "
+        f"Try a residential proxy= or, for CAPTCHA-gated sites, a managed unblocker API."
+    )
+
+
