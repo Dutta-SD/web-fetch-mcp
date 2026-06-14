@@ -1,8 +1,17 @@
 # web-fetch-mcp
 
+[![PyPI](https://img.shields.io/pypi/v/web-fetch-mcp.svg)](https://pypi.org/project/web-fetch-mcp/)
+[![Python](https://img.shields.io/pypi/pyversions/web-fetch-mcp.svg)](https://pypi.org/project/web-fetch-mcp/)
+[![CI](https://github.com/Dutta-SD/web-fetch-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Dutta-SD/web-fetch-mcp/actions/workflows/ci.yml)
+[![License](https://img.shields.io/pypi/l/web-fetch-mcp.svg)](https://github.com/Dutta-SD/web-fetch-mcp/blob/main/LICENSE)
+
 **A web-fetch [MCP](https://modelcontextprotocol.io) server for LLM agents that
 fails honestly — it raises `FetchBlocked` instead of silently handing your model
 a CAPTCHA or login page as if it were the article.**
+
+- **PyPI:** https://pypi.org/project/web-fetch-mcp/
+- **Source:** https://github.com/Dutta-SD/web-fetch-mcp
+- **Install:** `pip install web-fetch-mcp`
 
 Naive fetchers poison an agent's context: when a site returns a JavaScript
 interstitial or a login wall with HTTP 200, the agent reads the challenge page as
