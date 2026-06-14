@@ -249,3 +249,27 @@ def _render_by_type(result: FetchResult, output: str) -> str:
     return _to_output(result.body, output)
 
 
+# ---------- proxy parsing ----------
+
+
+def _proxy_for_curl(proxy: Optional[str]) -> Optional[dict]:
+    """curl_cffi wants {'http': ..., 'https': ...}."""
+    if not proxy:
+        return None
+    return {"http": proxy, "https": proxy}
+
+
+def _proxy_for_playwright(proxy: Optional[str]) -> Optional[dict]:
+    """Playwright wants {'server', 'username'?, 'password'?} with creds split out."""
+    if not proxy:
+        return None
+    p = urlparse(proxy)
+    server = f"{p.scheme}://{p.hostname}" + (f":{p.port}" if p.port else "")
+    out: dict = {"server": server}
+    if p.username:
+        out["username"] = p.username
+    if p.password:
+        out["password"] = p.password
+    return out
+
+
