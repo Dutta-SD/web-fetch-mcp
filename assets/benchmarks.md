@@ -48,7 +48,7 @@ average. "Tier" is the cheapest tier that produced the result.
 | 10 | htmx.org | static + HTMX | 1 | markdown | 7 KB | 0.2 s |
 | 11 | github.com/python/cpython | SSR + hydration | 1 | markdown | 24 KB | 1.0 s |
 | 12 | blog.cloudflare.com | SSR (not challenge-gated) | 1 | markdown | 30 KB | 1.0 s |
-| 13 | reddit.com/r/programming | CSR + soft block | **2** | markdown | 37 KB | 7.5 s |
+| 13 | a CSR site with a JS soft-block gate | CSR + soft block | **2** | markdown | 37 KB | 7.5 s |
 | 14 | w3.org/.../dummy.pdf | PDF | 1 | extracted text | 14 B | 0.1 s |
 | 15 | this-domain-does-not-exist-zzz999.com | unreachable | — | **FetchBlocked** | — | 3.4 s |
 
@@ -57,8 +57,8 @@ average. "Tier" is the cheapest tier that produced the result.
 - **13 / 14 reachable sites** were served by **Tier 1** (curl_cffi) — fast
   (≤1.1 s) — confirming the cheapest-first design: the browser only spins up when
   it has to.
-- **Reddit (#13)** is the one escalation: Tier 1 hit the "please wait for
-  verification" soft block, so `auto` escalated to the browser tier (Tier 2),
+- **Site #13** is the one escalation: Tier 1 hit a "please wait for
+  verification" JS soft block, so `auto` escalated to the browser tier (Tier 2),
   which returned the real page — at the expected browser cost (7.5 s). This is
   the soft-block-handling working as designed.
 - **Unreachable host (#15)** correctly raised `FetchBlocked` (3.4 s, after the

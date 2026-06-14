@@ -42,7 +42,7 @@ Ranked by fit:
 
 - [ ] **ML block/challenge detection (BEST FIT)** — second-stage *confirmer* on
   top of `_is_blocked`'s substring list. The hand-maintained `_BLOCK_MARKERS`
-  list has a recall gap (we found the Reddit gate by hand). A tiny text
+  list has a recall gap (a real soft-block gate was found by hand). A tiny text
   classifier ("real content vs block/challenge/login/paywall shell") generalizes
   to unseen gates. Helps BOTH consumer modes and deepens the project's crown
   jewel (honest failure). Use only when a page is *ambiguous* (passed substring

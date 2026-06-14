@@ -226,16 +226,16 @@ def test_render_corrupt_pdf_raises_fetchblocked():
 # ---------- block detection ----------
 
 
-def test_reddit_verification_gate_detected_as_soft_block():
+def test_verification_gate_detected_as_soft_block():
     """An HTTP-200 'Please wait for verification' interstitial is a soft block.
 
-    Verified live: Reddit serves this gate with status 200; without detection,
-    auto mode accepts ~37 chars of garbage instead of escalating to a browser
-    tier (which returns the real ~36KB page).
+    Some sites serve this JS verification gate with status 200; without
+    detection, auto mode would accept the tiny gate page instead of escalating
+    to a browser tier that returns the real content.
     """
     html = (
         "<!DOCTYPE html><html><head>"
-        "<title>Reddit - Please wait for verification</title></head>"
+        "<title>Please wait for verification</title></head>"
         "<body><form></form></body></html>"
     )
     assert is_blocked(html, 200) is True
