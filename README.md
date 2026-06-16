@@ -5,106 +5,214 @@
 [![CI](https://github.com/Dutta-SD/web-fetch-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Dutta-SD/web-fetch-mcp/actions/workflows/ci.yml)
 [![License](https://img.shields.io/pypi/l/web-fetch-mcp.svg)](https://github.com/Dutta-SD/web-fetch-mcp/blob/main/LICENSE)
 
-**A web-fetch [MCP](https://modelcontextprotocol.io) server for LLM agents that
-fails honestly — it raises `FetchBlocked` instead of silently handing your model
-a CAPTCHA or login page as if it were the article.**
+*A Python MCP server using browser fingerprint impersonation, headless Chrome,
+and multi-tier anti-detection to reliably fetch web pages for AI agents —
+published on PyPI with CI/CD pipeline and test coverage.*
+
+---
+
+## What is this?
+
+`web-fetch-mcp` is an [MCP](https://modelcontextprotocol.io) server that lets AI
+assistants (like Claude, Cursor, or any MCP-compatible client) fetch web pages
+**reliably**.
+
+### The problem it solves
+
+When an AI agent fetches a web page, many sites return a CAPTCHA, a JavaScript
+challenge, or a login wall — but still send HTTP status `200 OK`. A naive
+fetcher hands this garbage to the AI, which then reasons from nonsense.
+
+### How this tool fixes it
+
+`web-fetch-mcp` **detects** when a site returns a block page instead of real
+content, and either:
+
+1. **Escalates** to a stronger fetching strategy (there are 3 tiers), or
+2. **Fails loudly** with a clear error (`FetchBlocked`) — never silently
+   returning junk.
+
+> **Status:** Alpha. Core logic is tested, but real-world bypass benchmarks are
+> in progress.
+
+---
+
+## Installation
+
+**Requirements:** Python 3.11+
+
+```bash
+pip install web-fetch-mcp
+```
+
+That's it. This installs the `web-fetch-mcp` command on your system.
+
+---
+
+## Quick Start
+
+### 1. Run the server
+
+```bash
+web-fetch-mcp
+```
+
+This starts the MCP server in the background. It doesn't show anything on its
+own — your AI client talks to it automatically.
+
+### 2. Register with your MCP client
+
+Add this to your MCP client's configuration (e.g. `claude_desktop_config.json`,
+`.cursor/mcp.json`, or equivalent):
+
+```json
+{
+  "mcpServers": {
+    "web-fetch": {
+      "command": "web-fetch-mcp"
+    }
+  }
+}
+```
+
+### 3. Use it
+
+Once connected, your AI assistant gains two tools:
+
+| Tool | What it does |
+|------|--------------|
+| `fetch` | Retrieve a web page as markdown, plain text, HTML, or article (main content only) |
+| `screenshot` | Render a page in a real browser and return a PNG image |
+
+**Examples your AI can call:**
+
+```python
+# Get a clean article (strips navigation, ads, etc.)
+fetch("https://example.com/blog-post", output="article")
+
+# Get raw JSON from an API
+fetch("https://api.github.com/repos/owner/repo")
+
+# Force JavaScript rendering (for single-page apps like React/Vue)
+fetch("https://spa-app.example.com", mode="dynamic")
+
+# Take a screenshot of a dashboard
+screenshot("https://example.com/dashboard")
+```
+
+---
+
+## How It Works
+
+The server uses a **3-tier escalation ladder** — it starts cheap and fast, only
+using expensive browser-based methods when simpler ones get blocked:
+
+```
+Tier 1: curl_cffi        — Fast static fetch (~500ms)
+   ↓ (blocked?)
+Tier 2: Patchright       — Real Chrome browser, renders JavaScript (~1-3s)
+   ↓ (blocked?)
+Tier 3: nodriver         — Stealth Chrome, evades automation detection (~2-4s)
+   ↓ (still blocked?)
+Raise FetchBlocked error — never return garbage to the AI
+```
+
+![Escalation path diagram](https://raw.githubusercontent.com/Dutta-SD/web-fetch-mcp/main/assets/escalation-path.svg)
+
+### What each tier handles
+
+| Tier | Engine | What it defeats |
+|------|--------|-----------------|
+| 1 | `curl_cffi` | Sites that verify you're a "real browser" by inspecting connection details |
+| 2 | Patchright | Sites that need JavaScript to load (React/Vue apps, "please wait" screens) |
+| 3 | nodriver | Sites that detect you're using a script-controlled browser instead of a human |
+
+### Modes
+
+You can control which tiers are used:
+
+| Mode | Behavior |
+|------|----------|
+| `auto` (default) | Try all tiers cheapest-first, escalate on failure |
+| `static` | Tier 1 only — fastest, but won't work for JavaScript-heavy sites |
+| `dynamic` | Tier 2 only — opens a real browser to run JavaScript |
+| `stealth` | Tier 3 only — maximum effort to look like a real human browsing |
+
+### Output formats
+
+| Format | Use case |
+|--------|----------|
+| `markdown` (default) | Clean, readable text with links preserved |
+| `article` | Main content only (strips nav, sidebars, ads) |
+| `text` | Plain text, no formatting |
+| `html` | Raw rendered HTML |
+
+Non-HTML content is auto-detected: JSON gets pretty-printed, PDFs get
+text-extracted.
+
+---
+
+## Development Setup
+
+If you want to contribute or modify the code:
+
+```bash
+git clone https://github.com/Dutta-SD/web-fetch-mcp.git
+cd web-fetch-mcp
+uv sync                    # install dependencies
+uv pip install -e .        # install in editable mode
+web-fetch-mcp              # run the server
+```
+
+Run tests:
+
+```bash
+uv run pytest
+```
+
+### Project structure
+
+```
+src/web_fetch_mcp/
+├── controller/    → Tool definitions (what the AI client can call)
+├── service/       → Retry logic and escalation chain
+├── accessor/      → Browser engines (the actual fetching code)
+└── core/          → Shared utilities (config, block detection, rendering)
+```
+
+---
+
+## Responsible Use
+
+This tool is for fetching content you are **authorized** to access. You are
+responsible for complying with each site's Terms of Service, `robots.txt`, and
+applicable law. The tool honors `Retry-After` headers and backs off by default.
+It does **not** solve CAPTCHAs or bypass authentication you don't hold.
+
+---
+
+## Links
 
 - **PyPI:** https://pypi.org/project/web-fetch-mcp/
 - **Source:** https://github.com/Dutta-SD/web-fetch-mcp
-- **Install:** `pip install web-fetch-mcp`
+- **Issues:** https://github.com/Dutta-SD/web-fetch-mcp/issues
 
-Naive fetchers poison an agent's context: when a site returns a JavaScript
-interstitial or a login wall with HTTP 200, the agent reads the challenge page as
-if it were content and reasons from garbage. `web-fetch-mcp` detects that and
-either escalates to a stronger strategy or fails loudly.
+---
 
-> **Status:** early / alpha. The escalation logic and helpers are unit-tested,
-> but real-world bypass rates are not yet benchmarked — see `assets/benchmarks.md`
-> and the roadmap in `TODO.md`.
+## Glossary
 
-## How it works
-
-A cheapest-first escalation ladder. Each tier targets a different layer of
-bot-detection, and the server only pays for the expensive ones when it has to:
-
-| Tier | Engine | Targets | Speed |
-|------|--------|---------|-------|
-| 1 | `curl_cffi` (Chrome TLS/HTTP2 fingerprint) | TLS (JA3/JA4) + HTTP/2 fingerprinting | ~500 ms |
-| 2 | Patchright (real headful Chrome) | JavaScript fingerprinting; renders SPAs | ~1–3 s |
-| 3 | nodriver (custom CDP) | automation-protocol (CDP) detection | ~2–4 s |
-
-Every tier's output is checked for **hard blocks** (403/429/503) and **soft
-blocks** (HTTP-200 challenge or login bodies served in place of content).
-Transient failures retry with exponential backoff + jitter (honoring
-`Retry-After`) before escalating. If everything is blocked, it raises
-`FetchBlocked` with a remedy hint — it never returns a block page as content.
-
-### Escalation path (`mode="auto"`)
-
-![Escalation path: fetch(url) tries Tier 1 (curl_cffi static), escalating to
-Tier 2 (Patchright headful Chrome) then Tier 3 (nodriver stealth) on a block or
-empty SPA shell; the first tier to return usable content is rendered, otherwise
-it raises FetchBlocked.](https://raw.githubusercontent.com/Dutta-SD/web-fetch-mcp/main/assets/escalation-path.svg)
-
-Each tier runs through `with_retry` (exponential backoff + jitter, honoring
-`Retry-After`) before the chain escalates. Tier 1 must clear the **strict** check
-(not blocked **and** not an unrendered SPA shell); Tiers 2–3 only need to be
-not-blocked. The single-tier modes (`static`/`dynamic`/`stealth`) run exactly one
-box and skip the chain.
-
-## Tools
-
-- **`fetch`** — retrieve a page as `markdown` / `text` / `html` / `article`
-  (main-content extraction via trafilatura). Non-HTML URLs are auto-handled:
-  JSON is pretty-printed, PDFs are text-extracted, images return a note to use
-  `screenshot`.
-- **`screenshot`** — render a page in real Chrome and return a PNG.
-
-## Architecture
-
-A layered package (`src/web_fetch_mcp/`), dependencies pointing inward:
-
-```
-controller  (FastMCP tools, lifespan)        controller/app.py
-   -> service   (retry decorator, strategy registry, escalation, facade)
-        -> accessor  (curl_cffi / Patchright / nodriver, BrowserManager)
-             -> core   (models, config, detection, rendering, proxy, backoff)
-```
-
-- **Strategy** — the three tiers are interchangeable `async (request) -> FetchResult`
-  callables in a registry (`service/strategies.py`).
-- **Chain of Responsibility** (intent) — `auto` mode walks the tiers cheapest-first,
-  escalating until one yields usable content (`service/escalation.py`).
-- **Decorator** — `with_retry` adds exponential-backoff + Retry-After to any tier
-  (`service/retry.py`), hand-rolled on the stdlib (no `tenacity`).
-- **Manager** — `BrowserManager` owns one reused Chromium and closes it on the
-  FastMCP lifespan shutdown (`accessor/browser.py`).
-
-## Quickstart
-
-```bash
-uv sync
-uv pip install -e .        # installs the `web-fetch-mcp` console command
-web-fetch-mcp              # run the stdio MCP server
-```
-
-Register it with any MCP-compatible client as a stdio server that runs the
-`web-fetch-mcp` command (or `python -m web_fetch_mcp.controller.app`).
-
-```python
-fetch("https://example.com/article", output="article")   # clean main content
-fetch("https://api.site/data.json")                       # pretty-printed JSON
-fetch("https://spa.example.com", mode="dynamic")          # force a JS render
-```
-
-## Responsible use
-
-This tool is for fetching content you are **authorized** to access. You are
-solely responsible for complying with each site's Terms of Service, `robots.txt`,
-and applicable law. It honors `Retry-After` and backs off by default; please
-rate-limit responsibly. It does **not** solve CAPTCHAs or bypass authentication
-you do not hold. Provided **as-is, without warranty**.
+| Term | What it means |
+|------|---------------|
+| **MCP** | Model Context Protocol — a standard way for AI assistants to use external tools. Think of it like a USB port: any AI that speaks MCP can plug into this server. |
+| **CAPTCHA** | Those "click the traffic lights" puzzles websites use to check you're human. |
+| **SPA** | Single-Page App — a website (like Gmail or Twitter) that loads once and updates dynamically with JavaScript, instead of loading a new page for every click. |
+| **TLS fingerprint** | When your browser connects to a website securely, it leaves a "fingerprint" in how it sets up the connection. Sites use this to tell real browsers from scripts. |
+| **JavaScript rendering** | Many modern websites are blank HTML shells that only fill in content after JavaScript runs. A simple download gets an empty page; you need a real browser to see the content. |
+| **Bot detection** | Techniques websites use to block automated access (scripts, scrapers) while allowing real humans through. |
+| **stdio** | Standard input/output — the basic way programs talk to each other through text streams. Your AI client uses this to communicate with the server behind the scenes. |
+| **Escalation** | Trying progressively stronger methods. Like knocking on a door, then ringing the bell, then calling the person inside. |
+| **`FetchBlocked`** | The error this tool raises when a website blocks all attempts. It tells the AI "I couldn't get the page" instead of handing it a CAPTCHA page and pretending it's the article. |
 
 ## License
 
-[Apache-2.0](LICENSE).
+[Apache-2.0](LICENSE)
