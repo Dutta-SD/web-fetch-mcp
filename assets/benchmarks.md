@@ -30,27 +30,27 @@ checks, not solving puzzles.
 
 ## Measured results
 
-Run: 2026-06-14, `mode="auto"`, no proxy, from a residential macOS host
-(Apple Silicon, real Chrome). Latency is a single cold-ish sample, not an
-average. "Tier" is the cheapest tier that produced the result.
+Latest run: 2026-06-18, `mode="auto"`, no proxy, residential macOS host
+(Apple Silicon, real Chrome). Latency is a single sample, not an average.
+"Tier" is the cheapest tier that produced the result.
 
 | # | URL | Kind | Tier | Result | Size | Time |
 |---|-----|------|------|--------|------|------|
 | 1 | example.com | static HTML | 1 | markdown | 183 B | 0.1 s |
-| 2 | en.wikipedia.org/wiki/Tariff | SSR article | 1 | markdown | 158 KB | 0.4 s |
+| 2 | en.wikipedia.org/wiki/Tariff | SSR article | 1 | article (main content) | 69 KB | 0.5 s |
 | 3 | api.github.com/repos/python/cpython | JSON API | 1 | pretty JSON | 6.6 KB | 0.4 s |
-| 4 | jsonplaceholder.typicode.com/todos/1 | JSON API | 1 | pretty JSON | 83 B | 0.2 s |
-| 5 | news.ycombinator.com | static/SSR | 1 | markdown | 10 KB | 1.1 s |
+| 4 | jsonplaceholder.typicode.com/todos/1 | JSON API | 1 | pretty JSON | 83 B | 0.1 s |
+| 5 | news.ycombinator.com | static/SSR | 1 | markdown | 11 KB | 1.0 s |
 | 6 | developer.mozilla.org/en-US | SSR | 1 | markdown | 14 KB | 0.1 s |
 | 7 | nextjs.org | Next.js SSR | 1 | markdown | 17 KB | 0.3 s |
 | 8 | react.dev | SSG | 1 | markdown | 16 KB | 0.2 s |
 | 9 | vuejs.org | VitePress SSG | 1 | markdown | 5 KB | 0.2 s |
-| 10 | htmx.org | static + HTMX | 1 | markdown | 7 KB | 0.2 s |
-| 11 | github.com/python/cpython | SSR + hydration | 1 | markdown | 24 KB | 1.0 s |
-| 12 | blog.cloudflare.com | SSR (not challenge-gated) | 1 | markdown | 30 KB | 1.0 s |
-| 13 | a CSR site with a JS soft-block gate | CSR + soft block | **2** | markdown | 37 KB | 7.5 s |
+| 10 | htmx.org | static + HTMX | 1 | markdown | 7 KB | 0.4 s |
+| 11 | github.com/python/cpython | SSR + hydration | 1 | markdown | 24 KB | 1.1 s |
+| 12 | blog.cloudflare.com | SSR (not challenge-gated) | 1 | markdown | 29 KB | 0.6 s |
+| 13 | a CSR site with a JS soft-block gate | CSR + soft block | **2** | markdown | 36 KB | 13.3 s |
 | 14 | w3.org/.../dummy.pdf | PDF | 1 | extracted text | 14 B | 0.1 s |
-| 15 | this-domain-does-not-exist-zzz999.com | unreachable | — | **FetchBlocked** | — | 3.4 s |
+| 15 | this-domain-does-not-exist-zzz999.com | unreachable | — | **FetchBlocked** | — | 4.1 s |
 
 ### Reading the results
 
@@ -59,9 +59,9 @@ average. "Tier" is the cheapest tier that produced the result.
   it has to.
 - **Site #13** is the one escalation: Tier 1 hit a "please wait for
   verification" JS soft block, so `auto` escalated to the browser tier (Tier 2),
-  which returned the real page — at the expected browser cost (7.5 s). This is
+  which returned the real page — at the expected browser cost (13.3 s). This is
   the soft-block-handling working as designed.
-- **Unreachable host (#15)** correctly raised `FetchBlocked` (3.4 s, after the
+- **Unreachable host (#15)** correctly raised `FetchBlocked` (4.1 s, after the
   browser tiers' own retries) rather than returning the browser's "site can't be
   reached" error page — the honest-failure contract.
 - **No interactive-CAPTCHA site is in this set**, because the tool does not solve
