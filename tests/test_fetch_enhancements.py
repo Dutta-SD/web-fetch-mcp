@@ -355,3 +355,99 @@ def test_fetch_url_single_tier_blocked_raises_fetchblocked(monkeypatch):
     monkeypatch.setitem(strategies.TIERS, "static", patched)
     with pytest.raises(FetchBlocked):
         asyncio.run(fetch_url("https://x", mode="static", max_retries=0))
+
+
+# ---------- full escalation contract ----------
+
+
+def test_escalate_full_chain_static_blocked_dynamic_blocked_stealth_succeeds():
+    """Auto-mode escalates through all 3 tiers when earlier ones are blocked."""
+    blocked = FetchResult(body="", status=403)
+    good = FetchResult(body="<html><body>stealth content</body></html>", status=200)
+
+    async def fake_static(req):
+        return blocked
+
+    async def fake_dynamic(req):
+        return blocked
+
+    async def fake_stealth(req):
+        return good
+
+    chain = [
+        strategies.Tier("static", fake_static, strategies._not_blocked),
+        strategies.Tier("dynamic", fake_dynamic, strategies._not_blocked),
+        strategies.Tier("stealth", fake_stealth, strategies._not_blocked),
+    ]
+    result = asyncio.run(escalate(FetchRequest(url="https://x"), max_retries=0, chain=chain))
+    assert result is good
+
+
+def test_escalate_returns_first_tier_when_it_succeeds():
+    """Auto-mode returns the cheapest tier's result without escalating."""
+    good = FetchResult(body="<html><body>fast content</body></html>", status=200)
+    should_not_reach = FetchResult(body="<html><body>expensive</body></html>", status=200)
+
+    async def fake_static(req):
+        return good
+
+    async def fake_dynamic(req):
+        return should_not_reach
+
+    chain = [
+        strategies.Tier("static", fake_static, strategies._not_blocked),
+        strategies.Tier("dynamic", fake_dynamic, strategies._not_blocked),
+    ]
+    result = asyncio.run(escalate(FetchRequest(url="https://x"), max_retries=0, chain=chain))
+    assert result is good  # never reached dynamic
+
+
+def test_with_retry_retries_then_succeeds_on_second_attempt():
+    """A tier retries within its budget before the chain escalates."""
+    calls = {"n": 0}
+    good = FetchResult(body="ok", status=200)
+
+    async def flaky_tier(req):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return FetchResult(body="", status=503)
+        return good
+
+    runner = with_retry(max_retries=1, satisfactory=lambda r: r.status == 200)(flaky_tier)
+    result = asyncio.run(runner(FetchRequest(url="https://x")))
+    assert result is good
+    assert calls["n"] == 2  # tried twice
+
+
+def test_fetch_url_auto_mode_renders_result(monkeypatch):
+    """fetch_url in auto mode dispatches through escalate and renders the result."""
+    content = "<html><body><h1>Hello</h1></body></html>"
+    good = FetchResult(body=content, status=200)
+
+    async def fake_static(req):
+        return good
+
+    patched = strategies.Tier("static", fake_static, strategies._not_blocked)
+    monkeypatch.setitem(strategies.TIERS, "static", patched)
+
+    out = asyncio.run(fetch_url("https://x", mode="auto", output="markdown", max_retries=0))
+    assert "Hello" in out  # render_by_type converted HTML to markdown
+
+
+def test_fetch_url_auto_json_content_type_detection(monkeypatch):
+    """Auto-mode correctly detects and pretty-prints JSON from a static-tier response."""
+    json_body = '{"key":"value"}'
+    result = FetchResult(
+        body=json_body, status=200, raw=json_body.encode(),
+        content_type="application/json"
+    )
+
+    async def fake_static(req):
+        return result
+
+    patched = strategies.Tier("static", fake_static, strategies._not_blocked)
+    monkeypatch.setitem(strategies.TIERS, "static", patched)
+
+    out = asyncio.run(fetch_url("https://x", mode="auto", max_retries=0))
+    assert '"key": "value"' in out  # pretty-printed, not raw
+    assert "\n" in out  # indented
