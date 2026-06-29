@@ -17,6 +17,7 @@ from web_fetch_mcp.core.config import RETRY_AFTER_CAP
 from web_fetch_mcp.core.detection import is_blocked
 from web_fetch_mcp.core.models import FetchBlocked, FetchResult
 from web_fetch_mcp.core.rendering import detect_content_type, render_by_type, to_output
+from web_fetch_mcp.core.utils import extract_root_domain
 from web_fetch_mcp.service import strategies
 from web_fetch_mcp.service.circuit import CircuitState, DomainCircuitRegistry
 from web_fetch_mcp.service.escalation import build_auto_chain, escalate
@@ -458,19 +459,16 @@ def test_fetch_url_auto_json_content_type_detection(monkeypatch):
 
 
 def test_extract_root_domain_standard():
-    extract = DomainCircuitRegistry.extract_root_domain
-    assert extract("https://www.example.com/page") == "example.com"
-    assert extract("https://docs.api.example.com/v2") == "example.com"
+    assert extract_root_domain("https://www.example.com/page") == "example.com"
+    assert extract_root_domain("https://docs.api.example.com/v2") == "example.com"
 
 
 def test_extract_root_domain_two_part_tld():
-    extract = DomainCircuitRegistry.extract_root_domain
-    assert extract("https://shop.example.co.uk/items") == "example.co.uk"
+    assert extract_root_domain("https://shop.example.co.uk/items") == "example.co.uk"
 
 
 def test_extract_root_domain_bare():
-    extract = DomainCircuitRegistry.extract_root_domain
-    assert extract("https://localhost:8080/") == "localhost"
+    assert extract_root_domain("https://localhost:8080/") == "localhost"
 
 
 def test_circuit_starts_closed():

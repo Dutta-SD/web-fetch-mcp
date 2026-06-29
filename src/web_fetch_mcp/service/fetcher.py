@@ -8,30 +8,20 @@ controller's ``fetch`` tool is a thin wrapper over this.
 
 from __future__ import annotations
 
-from enum import StrEnum
-
 from web_fetch_mcp.core.models import FetchBlocked, FetchMode, OutputFormat
 from web_fetch_mcp.core.rendering import render_by_type
+from web_fetch_mcp.core.utils import parse_enum
 from web_fetch_mcp.service.circuit import domain_circuits
 from web_fetch_mcp.service.escalation import build_auto_chain, escalate
 from web_fetch_mcp.service.request import FetchRequest
 from web_fetch_mcp.service.strategies import TIERS, build_tier
 
 
-def _parse_enum(enum_cls: type[StrEnum], value: str, param_name: str) -> StrEnum:
-    """Validate and convert a string to an enum member, or raise ValueError."""
-    try:
-        return enum_cls(value)
-    except ValueError:
-        valid = ", ".join(e.value for e in enum_cls)
-        raise ValueError(f"{param_name} must be one of [{valid}], got {value!r}") from None
-
-
 async def fetch_url(
     url: str,
     mode: str = "auto",
     output: str = "markdown",
-    wait_ms: int = 2000,
+    wait_ms: int = 5000,
     dismiss_selector: str | None = None,
     proxy: str | None = None,
     max_retries: int = 1,
@@ -70,8 +60,8 @@ async def fetch_url(
         FetchBlocked: If the circuit is open for this domain, or if every
             applicable tier was blocked or failed.
     """
-    resolved_mode = _parse_enum(FetchMode, mode, "mode")
-    resolved_output = _parse_enum(OutputFormat, output, "output")
+    resolved_mode = parse_enum(FetchMode, mode, "mode")
+    resolved_output = parse_enum(OutputFormat, output, "output")
 
     if dismiss_selector and resolved_mode == FetchMode.STATIC:
         raise ValueError(

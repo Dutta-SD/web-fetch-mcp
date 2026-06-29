@@ -38,6 +38,7 @@ dependencies = [
     "nodriver>=0.40",
     "trafilatura>=1.8.0",
     "pypdf>=4.0.0",
+    "tldextract>=5.0.0",
 ]
 
 [project.urls]

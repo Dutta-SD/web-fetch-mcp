@@ -11,10 +11,10 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from urllib.parse import urlparse
 
 from web_fetch_mcp.core.config import CIRCUIT_FAIL_MAX, CIRCUIT_RESET_TIMEOUT
 from web_fetch_mcp.core.models import FetchBlocked
+from web_fetch_mcp.core.utils import extract_root_domain
 
 
 class CircuitState(Enum):
@@ -67,32 +67,9 @@ class DomainCircuitRegistry:
         self.reset_timeout = reset_timeout
         self._circuits: dict[str, _DomainCircuit] = {}
 
-    @staticmethod
-    def extract_root_domain(url: str) -> str:
-        """Extract the registrable root domain from a URL.
-
-        Subdomains roll up to the root: ``docs.example.com`` → ``example.com``.
-        Two-part TLDs (``co.uk``, ``com.au``) are handled by taking the last
-        three labels when the second-to-last label is short (<=3 chars) and the
-        TLD is short (<=2 chars).
-
-        Args:
-            url: A fully-qualified URL (e.g. ``https://docs.example.co.uk/path``).
-
-        Returns:
-            The root domain string (e.g. ``"example.co.uk"``).
-        """
-        hostname = urlparse(url).hostname or ""
-        parts = hostname.split(".")
-        if len(parts) >= 3 and len(parts[-2]) <= 3 and len(parts[-1]) <= 2:
-            return ".".join(parts[-3:])
-        if len(parts) >= 2:
-            return ".".join(parts[-2:])
-        return hostname
-
     def _get_circuit(self, url: str) -> tuple[str, _DomainCircuit]:
         """Get or lazily create the circuit for a URL's root domain."""
-        domain = self.extract_root_domain(url)
+        domain = extract_root_domain(url)
         if domain not in self._circuits:
             self._circuits[domain] = _DomainCircuit()
         return domain, self._circuits[domain]
