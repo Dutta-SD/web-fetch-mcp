@@ -1,6 +1,6 @@
 [project]
 name = "web-fetch-mcp"
-version = "0.1.3"
+version = "1.0.0"
 description = "Resilient web-fetch MCP server: 3-tier escalation (curl_cffi -> Patchright -> nodriver) that fails honestly, with article-extraction mode and automatic content-type handling (HTML/JSON/PDF/image)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -19,7 +19,7 @@ keywords = [
     "nodriver",
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",

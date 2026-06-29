@@ -19,4 +19,4 @@ from __future__ import annotations
 from web_fetch_mcp.core.models import FetchBlocked, FetchResult
 
 __all__ = ["FetchBlocked", "FetchResult"]
-__version__ = "0.1.3"
+__version__ = "1.0.0"
