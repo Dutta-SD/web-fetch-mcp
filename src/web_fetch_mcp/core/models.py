@@ -7,6 +7,38 @@ layer (controller/service/accessor) or third-party I/O library.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
+
+
+class FetchMode(StrEnum):
+    """Strategy selector for the fetch tool.
+
+    AUTO: Cheapest-first escalation (Tier 1 → 2 → 3) until one succeeds.
+    STATIC: Tier 1 only (curl_cffi static fetch, no JavaScript rendering).
+    DYNAMIC: Tier 2 only (real headful Chrome, renders JavaScript).
+    STEALTH: Tier 3 only (nodriver, custom CDP to avoid automation detection).
+    """
+
+    AUTO = "auto"
+    STATIC = "static"
+    DYNAMIC = "dynamic"
+    STEALTH = "stealth"
+
+
+class OutputFormat(StrEnum):
+    """Output format for the rendered fetch result.
+
+    MARKDOWN: Readable, link-preserving markdown (default for LLM consumption).
+    ARTICLE: Main-content extraction via trafilatura, strips nav/ads/boilerplate.
+             Falls back to full markdown when extraction yields nothing.
+    TEXT: Visible text only, no formatting or markup.
+    HTML: Raw rendered HTML (for DOM inspection or downstream parsing).
+    """
+
+    MARKDOWN = "markdown"
+    ARTICLE = "article"
+    TEXT = "text"
+    HTML = "html"
 
 
 class FetchBlocked(Exception):

@@ -18,6 +18,7 @@ from web_fetch_mcp.core.detection import is_blocked
 from web_fetch_mcp.core.models import FetchBlocked, FetchResult
 from web_fetch_mcp.core.rendering import detect_content_type, render_by_type, to_output
 from web_fetch_mcp.service import strategies
+from web_fetch_mcp.service.circuit import CircuitState, DomainCircuitRegistry
 from web_fetch_mcp.service.escalation import build_auto_chain, escalate
 from web_fetch_mcp.service.fetcher import fetch_url
 from web_fetch_mcp.service.request import FetchRequest
@@ -451,3 +452,90 @@ def test_fetch_url_auto_json_content_type_detection(monkeypatch):
     out = asyncio.run(fetch_url("https://x", mode="auto", max_retries=0))
     assert '"key": "value"' in out  # pretty-printed, not raw
     assert "\n" in out  # indented
+
+
+# ---------- domain-level circuit breaker ----------
+
+
+def test_extract_root_domain_standard():
+    extract = DomainCircuitRegistry.extract_root_domain
+    assert extract("https://www.example.com/page") == "example.com"
+    assert extract("https://docs.api.example.com/v2") == "example.com"
+
+
+def test_extract_root_domain_two_part_tld():
+    extract = DomainCircuitRegistry.extract_root_domain
+    assert extract("https://shop.example.co.uk/items") == "example.co.uk"
+
+
+def test_extract_root_domain_bare():
+    extract = DomainCircuitRegistry.extract_root_domain
+    assert extract("https://localhost:8080/") == "localhost"
+
+
+def test_circuit_starts_closed():
+    reg = DomainCircuitRegistry(fail_max=3, reset_timeout=60)
+    assert reg.get_state("https://example.com") == "closed"
+
+
+def test_circuit_opens_after_fail_max():
+    reg = DomainCircuitRegistry(fail_max=3, reset_timeout=60)
+    url = "https://example.com/page1"
+    reg.record_failure(url, reason="captcha")
+    reg.record_failure(url, reason="captcha")
+    reg.record_failure(url, reason="captcha")
+    assert reg.get_state(url) == "open"
+    with pytest.raises(FetchBlocked, match="circuit breaker open"):
+        reg.check(url)
+
+
+def test_circuit_subdomain_rolls_up_to_root():
+    reg = DomainCircuitRegistry(fail_max=2, reset_timeout=60)
+    reg.record_failure("https://www.example.com/a", reason="blocked")
+    reg.record_failure("https://api.example.com/b", reason="blocked")
+    # both subdomains hit the same root domain circuit
+    assert reg.get_state("https://example.com") == "open"
+
+
+def test_circuit_success_resets():
+    reg = DomainCircuitRegistry(fail_max=2, reset_timeout=60)
+    url = "https://example.com"
+    reg.record_failure(url, reason="x")
+    reg.record_failure(url, reason="x")
+    assert reg.get_state(url) == "open"
+    # simulate timeout elapsed by manually setting state to half-open
+    reg._circuits["example.com"].state = CircuitState.HALF_OPEN
+    reg.record_success(url)
+    assert reg.get_state(url) == "closed"
+
+
+def test_circuit_half_open_probe_failure_reopens():
+    reg = DomainCircuitRegistry(fail_max=2, reset_timeout=60)
+    url = "https://example.com"
+    reg.record_failure(url, reason="x")
+    reg.record_failure(url, reason="x")
+    # force half-open (simulates timeout elapsed)
+    reg._circuits["example.com"].state = CircuitState.HALF_OPEN
+    # probe fails
+    reg.record_failure(url, reason="still blocked")
+    assert reg.get_state(url) == "open"
+
+
+def test_circuit_does_not_block_different_domains():
+    reg = DomainCircuitRegistry(fail_max=2, reset_timeout=60)
+    for _ in range(3):
+        reg.record_failure("https://bad.com/x", reason="blocked")
+    assert reg.get_state("https://bad.com") == "open"
+    # different domain is unaffected
+    reg.check("https://good.com/page")  # should not raise
+
+
+def test_circuit_manual_reset():
+    reg = DomainCircuitRegistry(fail_max=2, reset_timeout=60)
+    url = "https://example.com"
+    reg.record_failure(url, reason="x")
+    reg.record_failure(url, reason="x")
+    assert reg.get_state(url) == "open"
+    reg.reset(url)
+    assert reg.get_state(url) == "closed"
+    reg.check(url)  # should not raise

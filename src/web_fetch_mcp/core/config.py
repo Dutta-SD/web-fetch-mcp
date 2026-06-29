@@ -55,3 +55,9 @@ DEFAULT_TIMEOUT_MS: int = 30_000
 
 # Only the first N characters of a body are scanned for soft-block markers.
 BLOCK_SCAN_LIMIT: int = 30_000
+
+# Circuit breaker: per-domain thresholds. After CIRCUIT_FAIL_MAX consecutive
+# failures to the same root domain, the circuit opens and requests are rejected
+# immediately for CIRCUIT_RESET_TIMEOUT seconds (then half-open: one probe).
+CIRCUIT_FAIL_MAX: int = 3
+CIRCUIT_RESET_TIMEOUT: float = 60.0
